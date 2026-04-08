@@ -8,6 +8,26 @@ static size_t hashkey(const SDS&key){
     // return std::hash<std::string_view>{}(sv);
 }
 
+void DICT::clear() {
+    if(dict_.ht[0].table == nullptr){
+        return;
+    }
+
+    for (size_t i = 0; i < dict_.ht[0].size; ++i) {
+        dictEntry* entry = dict_.ht[0].table[i];
+        while (entry != nullptr) {
+            dictEntry* next = entry->next;
+            delete entry;
+            entry = next;
+        }
+    }
+    delete[] dict_.ht[0].table;
+    dict_.ht[0].table = nullptr;
+    dict_.ht[0].size = 0;
+    dict_.ht[0].used = 0;
+    dict_.rehashidx = -1;
+}
+
 DICT::DICT(){
     dict_.rehashidx=-1;
 
@@ -25,18 +45,30 @@ DICT::DICT(){
 }
 
 DICT::~DICT(){
-    for(size_t i=0;i<dict_.ht[0].size;i++){
-        dictEntry* entry=dict_.ht[0].table[i];
-        while(entry){
-            dictEntry*next=entry->next;
-            delete entry;
-            entry=next;
-        }
-    }
-    delete[] dict_.ht[0].table;
-    //dict[1]
+    clear();
+}
+DICT::DICT(DICT&&other)noexcept{
+    dict_=other.dict_;
+    other.dict_.ht[0].table = nullptr;
+    other.dict_.ht[1].table = nullptr;
+  
+    other.dict_.ht[0].size = other.dict_.ht[0].used = 0;
+    other.dict_.ht[1].size = other.dict_.ht[1].used = 0;
+    other.dict_.rehashidx = -1; 
 }
 
+DICT& DICT::operator=(DICT&&other)noexcept{
+     if (this != &other) { 
+        clear();
+        dict_ = other.dict_;
+        other.dict_.ht[0].table = nullptr;
+        other.dict_.ht[1].table = nullptr;
+        other.dict_.ht[0].size = other.dict_.ht[0].used = 0;
+        other.dict_.ht[1].size = other.dict_.ht[1].used = 0;
+        other.dict_.rehashidx = -1;
+    }
+    return *this;
+}
 bool DICT::set(SDS&& key, void* value){
     size_t hash=hashkey(key);
     size_t index = hash & dict_.ht[0].sizemask;
@@ -56,9 +88,8 @@ bool DICT::set(SDS&& key, void* value){
 
     newEntry->key = std::move(key);
     newEntry->value = value;
-
+    //头插
     newEntry->next = dict_.ht[0].table[index];
-
     dict_.ht[0].table[index] = newEntry;
     dict_.ht[0].used++;
     return true;
@@ -66,9 +97,7 @@ bool DICT::set(SDS&& key, void* value){
 
 void* DICT::get(const SDS&key){
     size_t hash = hashkey(key);
-
     size_t index = hash & dict_.ht[0].sizemask;
-
     dictEntry* entry = dict_.ht[0].table[index];
 
     while(entry)
@@ -84,7 +113,6 @@ void* DICT::get(const SDS&key){
 
 bool DICT::erase(const SDS&key){
     size_t hash = hashkey(key);
-
     size_t index = hash & dict_.ht[0].sizemask;
 
     dictEntry* entry = dict_.ht[0].table[index];

@@ -23,6 +23,8 @@ class DICT{
 public:
     DICT();
     ~DICT();
+    DICT(DICT&&other)noexcept;
+    DICT& operator=(DICT&&other)noexcept;
     bool set(SDS&& key, void* value);
     void* get(const SDS&key);
     bool erase(const SDS&key);
@@ -33,6 +35,7 @@ private:
 private:
     void rehashStep();
     void expandIfNeeded();
+    void clear();
 };
 
 #endif
