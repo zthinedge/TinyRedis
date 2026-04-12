@@ -14,6 +14,10 @@ add_executable(tinyredis
     src/core/dict.cpp
     src/protocol/respParser.cpp
     src/protocol/respEncoder.cpp
+    src/command/inMemoryDB.cpp
+    src/command/commandParser.cpp
+    src/command/commandDispatcher.cpp
+    src/net/epollServer.cpp
 )
 
 # 包含头文件目录
@@ -66,3 +70,22 @@ target_link_libraries(test_resp
 target_include_directories(test_resp PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 add_test(NAME RespTests COMMAND test_resp)
+
+# Command 测试
+add_executable(test_command
+    test/test_command.cpp
+    src/protocol/respParser.cpp
+    src/protocol/respEncoder.cpp
+    src/command/inMemoryDB.cpp
+    src/command/commandParser.cpp
+    src/command/commandDispatcher.cpp
+)
+
+target_link_libraries(test_command
+    GTest::gtest
+    GTest::gtest_main
+)
+
+target_include_directories(test_command PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
+add_test(NAME CommandTests COMMAND test_command)

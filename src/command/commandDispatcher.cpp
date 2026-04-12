@@ -65,5 +65,25 @@ std::string CommandDispatcher::dispatch(const std::vector<std::string>& argv) {
         return RESPEncoder::integer(removed);
     }
 
+    if (cmd == "EXISTS") {
+        if (argv.size() != 2) {
+            return wrongArity("exists");
+        }
+        return RESPEncoder::integer(db_.exists(argv[1]) ? 1 : 0);
+    }
+
+    if (cmd == "INCR") {
+        if (argv.size() != 2) {
+            return wrongArity("incr");
+        }
+
+        long long newValue = 0;
+        std::string err;
+        if (!db_.incr(argv[1], newValue, err)) {
+            return RESPEncoder::error("ERR " + err);
+        }
+        return RESPEncoder::integer(newValue);
+    }
+
     return RESPEncoder::error("ERR unknown command '" + argv[0] + "'");
 }
