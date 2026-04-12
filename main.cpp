@@ -1,51 +1,137 @@
-#include "include/core/sds.hpp"
-#include "include/core/dict.hpp"
+#include "command/commandDispatcher.hpp"
+#include "command/commandParser.hpp"
+#include "protocol/respEncoder.hpp"
+#include "protocol/respParser.hpp"
+
+#include <arpa/inet.h>
+#include <cerrno>
+#include <cstring>
 #include <iostream>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
-int main()
-{
-    // 测试 SDS
-    SDS s("hello");
-    s.append(" world", 6);
-    std::cout << "SDS: " << s.c_str() << std::endl;
-    std::cout << "len=" << s.len() << ", cap=" << s.capacity() << std::endl;
+namespace {
+bool sendAll(int fd, const std::string& data) {
+    size_t sent = 0;
+    while (sent < data.size()) {
+        const ssize_t n = ::send(fd, data.data() + sent, data.size() - sent, 0);
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return false;
+        }
+        if (n == 0) {
+            return false;
+        }
+        sent += static_cast<size_t>(n);
+    }
+    return true;
+}
+} // namespace
 
-    // 测试 DICT
-    std::cout << "\n=== DICT Test ===" << std::endl;
+int main() {
+    constexpr int kPort = 6379;
+    constexpr int kBacklog = 16;
+    constexpr size_t kReadBufSize = 4096;
 
-    DICT dict;
-    int val1 = 100, val2 = 200;
-
-    // set & get
-    dict.set(SDS("name"), &val1);
-    std::cout << "set name=100, size=" << dict.size() << std::endl;
-
-    int* got = static_cast<int*>(dict.get(SDS("name")));
-    if (got) {
-        std::cout << "get name=" << *got << std::endl;
-    } else {
-        std::cout << "get name=nullptr" << std::endl;
+    const int listenFd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (listenFd < 0) {
+        std::cerr << "socket failed: " << std::strerror(errno) << "\n";
+        return 1;
     }
 
-    // update
-    dict.set(SDS("name"), &val2);
-    got = static_cast<int*>(dict.get(SDS("name")));
-    std::cout << "update name=200, get name=" << (got ? *got : -1) << ", size=" << dict.size() << std::endl;
+    int opt = 1;
+    if (::setsockopt(listenFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+        std::cerr << "setsockopt failed: " << std::strerror(errno) << "\n";
+        ::close(listenFd);
+        return 1;
+    }
 
-    // erase
-    bool erased = dict.erase(SDS("name"));
-    std::cout << "erase name=" << (erased ? "true" : "false") << ", size=" << dict.size() << std::endl;
+    sockaddr_in addr {};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(kPort);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
-    // get after erase
-    got = static_cast<int*>(dict.get(SDS("name")));
-    std::cout << "get after erase=" << (got ? std::to_string(*got) : "nullptr") << std::endl;
+    if (::bind(listenFd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+        std::cerr << "bind 127.0.0.1:" << kPort << " failed: " << std::strerror(errno) << "\n";
+        ::close(listenFd);
+        return 1;
+    }
 
-    // multiple keys
-    int v1 = 10, v2 = 20, v3 = 30;
-    dict.set(SDS("a"), &v1);
-    dict.set(SDS("b"), &v2);
-    dict.set(SDS("c"), &v3);
-    std::cout << "\nMultiple keys, size=" << dict.size() << std::endl;
+    if (::listen(listenFd, kBacklog) < 0) {
+        std::cerr << "listen failed: " << std::strerror(errno) << "\n";
+        ::close(listenFd);
+        return 1;
+    }
 
+    std::cout << "TinyRedis listening on 127.0.0.1:" << kPort << "\n";
+
+    CommandDispatcher dispatcher;
+
+    for (;;) {
+        const int connFd = ::accept(listenFd, nullptr, nullptr);
+        if (connFd < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            std::cerr << "accept failed: " << std::strerror(errno) << "\n";
+            break;
+        }
+
+        RESPParser parser;
+        char buf[kReadBufSize];
+
+        for (;;) {
+            const ssize_t n = ::recv(connFd, buf, sizeof(buf), 0);
+            if (n == 0) {
+                break;
+            }
+            if (n < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                std::cerr << "recv failed: " << std::strerror(errno) << "\n";
+                break;
+            }
+
+            parser.feed(buf, static_cast<size_t>(n));
+
+            for (;;) {
+                RESPObject obj;
+                bool ok = false;
+                try {
+                    ok = parser.parse(obj);
+                } catch (const std::exception& ex) {
+                    const std::string errReply =
+                        RESPEncoder::error(std::string("ERR protocol error: ") + ex.what());
+                    sendAll(connFd, errReply);
+                    ok = false;
+                }
+
+                if (!ok) {
+                    break;
+                }
+
+                std::vector<std::string> argv;
+                std::string err;
+                std::string reply;
+                if (!CommandParser::toArgv(obj, argv, err)) {
+                    reply = RESPEncoder::error("ERR " + err);
+                } else {
+                    reply = dispatcher.dispatch(argv);
+                }
+
+                if (!sendAll(connFd, reply)) {
+                    break;
+                }
+            }
+        }
+
+        ::close(connFd);
+    }
+
+    ::close(listenFd);
     return 0;
 }
