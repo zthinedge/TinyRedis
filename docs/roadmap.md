@@ -1,70 +1,54 @@
-# TinyRedis 路线图
+# TinyRedis Roadmap
 
-说明：如果目标是“工业级可上线实现”，请优先阅读 [工业化实现方案](industrial-plan.md)。
+## 文档定位
 
-## 目标
+本文件只描述 TinyRedis 的演进方向与优先级，不包含具体日期。  
+任务拆解、状态流转与排期统一在 GitHub `Issues/Projects` 中维护。
 
-构建一个小而完整的类 Redis 服务，用来学习：
+## 项目目标
 
-- Redis 的设计思想
-- C++ 系统编程能力
-- AI 协作编程工作流
+- 构建一个可运行、可测试、可演进的 Redis 核心子集实现。
+- 在保持分层清晰的前提下，逐步补齐协议、命令、存储与工程化能力。
+- 优先保证正确性与稳定性，再推进性能与高级特性。
 
-## 当前进度
+## 当前基线
 
-- `SDS`：基础动态字符串已实现。
-- `DICT`：基础哈希表 API（`set/get/erase`）已实现。
-- `RESP`：编码器/解析器与基础测试已就位。
-- `Command`：`PING/SET/GET/DEL/EXISTS/INCR` 已实现并有单元测试。
-- `Server`：最小 TCP 服务已可被 `redis-cli` 连接验证。
+- 网络层：单线程 `epoll`（LT）事件循环可用。
+- 协议层：RESP2 基础解析与编码可用。
+- 命令链路：`PING/SET/GET/DEL/EXISTS/INCR` 已打通。
+- 存储层：`InMemoryDB + DICT + SDS + RedisObject` 基础能力可用。
+- 测试：`test_sds`、`test_dict`、`test_resp`、`test_command` 已接入 CTest。
 
-## 里程碑
+## Now（当前优先）
 
-### M1：命令层（已完成）
+- 补齐命令与协议边界测试：非法输入、半包/粘包、错误语义一致性。
+- 整理命令执行链路的错误处理与返回格式，减少隐式行为。
+- 完善文档与目录职责说明，保持实现与文档一致。
+- 建立基础质量门禁：本地默认跑通 `ctest --output-on-failure`。
 
-- 将 RESP Array 解析为命令 `argv`。
-- 增加命令分发器（dispatcher）。
-- 支持 `PING`、`SET`、`GET`、`DEL`。
+## Next（下一阶段）
 
-验收标准：
+- 引入并完善 TTL 能力：`EXPIRE/TTL/PTTL/PERSIST`。
+- 增强对象与存储抽象，降低 `command` 与底层实现耦合。
+- 扩展命令子集（按优先级逐步补齐 String 常用命令）。
+- 补充端到端测试（`redis-cli`/脚本）覆盖真实请求链路。
 
-- 能解析 `*2\r\n$4\r\nPING\r\n$4\r\nPONG\r\n` 这类输入。
-- 对已支持命令返回正确 RESP 回复。
+## Later（中长期）
 
-### M2：内存数据库核心（进行中）
+- 持久化：AOF 写入与重放恢复。
+- 更多数据类型：List/Hash/Set/ZSet 核心子集。
+- 稳定性与可观测性：慢命令、基础指标、故障定位信息。
+- 性能基线与回归对比（吞吐/延迟）。
 
-- 使用 `DICT + SDS` 作为 key/value 存储引擎。
-- 明确 value 所有权与生命周期模型。
-- 增加基础过期机制（TTL，先做惰性删除）。
+## 完成标准（Definition of Done）
 
-验收标准：
+- 功能有对应测试，且 `ctest --output-on-failure` 通过。
+- 行为与错误语义符合当前文档约定。
+- 关键变更同步更新 README/设计文档。
+- 代码通过基本自检（编译、核心路径验证）。
 
-- `SET/GET/DEL/EXISTS/INCR` 测试通过。
-- 过期 key 不会被返回。
+## 跟踪方式
 
-### M3：TCP 服务循环（进行中）
-
-- 已实现单线程 TCP 版本（可与 `redis-cli` 通信）。
-- 已升级为 `epoll`（LT）事件循环，支持多连接并发处理。
-- 下一步考虑 `EPOLLET`（ET）版本对比与优化。
-- 持续保持协议正确性优先于性能优化。
-
-验收标准：
-
-- 可通过 socket 跑通端到端 CLI 测试。
-
-### M4：Redis 风格增强
-
-- 渐进式 rehash。
-- value 对象抽象。
-- 基础 AOF（append-only）持久化。
-
-验收标准：
-
-- 每个特性能说明设计取舍，并提供对应测试。
-
-## 开发规则
-
-- 一次只推进一个里程碑。
-- 每个功能必须先有测试，再继续下一个功能。
-- 任何非平凡设计取舍都记录到 `docs/decisions.md`。
+- 任务来源：GitHub Issues。
+- 状态管理：GitHub Projects（`Todo / In Progress / Done`）。
+- 本文档只保留长期有效的方向与优先级，不记录日常进度细节。
