@@ -1,0 +1,41 @@
+name: TinyRedis Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ libgtest-dev
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j --target tinyredis
+
+      - name: Package Binary
+        run: |
+          mkdir -p dist
+          cp build/tinyredis dist/tinyredis-linux-x64
+          cd dist
+          tar -czf tinyredis-linux-x64.tar.gz tinyredis-linux-x64
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/tinyredis-linux-x64.tar.gz
