@@ -93,3 +93,18 @@ target_link_libraries(test_command
 target_include_directories(test_command PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 add_test(NAME CommandTests COMMAND test_command)
+
+# E2E 测试
+add_executable(test_e2e
+    test/test_e2e.cpp
+    src/protocol/respParser.cpp
+)
+
+target_link_libraries(test_e2e
+    GTest::gtest
+    GTest::gtest_main
+)
+
+target_include_directories(test_e2e PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
+add_test(NAME E2ETests COMMAND test_e2e)
