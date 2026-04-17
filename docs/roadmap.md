@@ -17,6 +17,7 @@
 - 协议层：RESP2 基础解析与编码可用。
 - 命令链路：`PING/SET/MSET/GET/MGET/DEL/EXISTS/INCR/INCRBY/DECR/EXPIRE/TTL/PTTL/PERSIST` 已打通。
 - 过期机制：惰性过期 + 主动过期扫描（cron 抽样）可用。
+- 持久化：最小 AOF（追加写入 + 启动重放）可用。
 - 存储层：`InMemoryDB + DICT + SDS + RedisObject` 基础能力可用。
 - 测试：`test_sds`、`test_dict`、`test_resp`、`test_command` 已接入 CTest。
 
@@ -32,7 +33,7 @@
 
 - 增强对象与存储抽象，降低 `command` 与底层实现耦合。
 - 扩展命令子集（按优先级逐步补齐 String 常用命令，如 `DECR/INCRBY/MGET/MSET/SET` 选项）。
-- 初步引入持久化骨架（AOF 追加写入与最小恢复链路）。
+- 完善 AOF（错误恢复、可配置刷盘策略、AOF 重写）。
 
 ## Later（中长期）
 

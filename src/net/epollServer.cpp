@@ -23,7 +23,7 @@ constexpr size_t kReadBufSize = 4096;
 } // namespace
 
 EpollServer::EpollServer(int port)
-    : port_(port), listenFd_(-1), epollFd_(-1) {}
+    : port_(port), listenFd_(-1), epollFd_(-1), dispatcher_(true) {}
 
 EpollServer::~EpollServer() {
     for (const auto& [fd, _] : clients_) {
@@ -105,6 +105,11 @@ bool EpollServer::initEpoll() {
 }
 
 bool EpollServer::init() {
+    if (!dispatcher_.loadAof()) {
+        std::cerr << "AOF load failed: " << dispatcher_.lastError() << "\n";
+        return false;
+    }
+
     if (!initListenSocket()) {
         return false;
     }

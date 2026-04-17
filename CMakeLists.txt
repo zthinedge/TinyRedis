@@ -18,6 +18,7 @@ add_executable(tinyredis
     src/command/inMemoryDB.cpp
     src/command/commandParser.cpp
     src/command/commandDispatcher.cpp
+    src/persistentence/aof.cpp
     src/net/epollServer.cpp
 )
 
@@ -83,6 +84,7 @@ add_executable(test_command
     src/command/inMemoryDB.cpp
     src/command/commandParser.cpp
     src/command/commandDispatcher.cpp
+    src/persistentence/aof.cpp
 )
 
 target_link_libraries(test_command
@@ -93,6 +95,29 @@ target_link_libraries(test_command
 target_include_directories(test_command PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 add_test(NAME CommandTests COMMAND test_command)
+
+# AOF 测试
+add_executable(test_aof
+    test/test_aof.cpp
+    src/core/sds.cpp
+    src/core/dict.cpp
+    src/object/redisObject.cpp
+    src/protocol/respParser.cpp
+    src/protocol/respEncoder.cpp
+    src/command/inMemoryDB.cpp
+    src/command/commandParser.cpp
+    src/command/commandDispatcher.cpp
+    src/persistentence/aof.cpp
+)
+
+target_link_libraries(test_aof
+    GTest::gtest
+    GTest::gtest_main
+)
+
+target_include_directories(test_aof PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
+add_test(NAME AOFTests COMMAND test_aof)
 
 # E2E 测试
 add_executable(test_e2e

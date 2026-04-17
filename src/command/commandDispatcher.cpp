@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include <stdexcept>
+#include <utility>
 
 namespace {
 constexpr size_t kActiveExpireSampleCount = 64;
@@ -53,14 +54,52 @@ std::string encodeMGetReply(const std::vector<MGetValue>& values) {
 }
 } // namespace
 
+CommandDispatcher::CommandDispatcher(bool enableAof, std::string aofPath)
+    : db_(), aof_(enableAof, std::move(aofPath)), lastError_() {}
+
+bool CommandDispatcher::loadAof() {
+    lastError_.clear();
+
+    return aof_.replay(
+        [&](const std::vector<std::string>& argv, std::string& err) {
+            const std::string reply = dispatchInternal(argv, true);
+            if (!reply.empty() && reply[0] == '-') {
+                err = reply;
+                return false;
+            }
+            return true;
+        },
+        lastError_);
+}
+
+const std::string& CommandDispatcher::lastError() const {
+    return lastError_;
+}
+
 void CommandDispatcher::cron() {
     (void)db_.activeExpireCycle(kActiveExpireSampleCount);
 }
 
 std::string CommandDispatcher::dispatch(const std::vector<std::string>& argv) {
+    return dispatchInternal(argv, false);
+}
+
+std::string CommandDispatcher::dispatchInternal(const std::vector<std::string>& argv, bool replayingAof) {
     if (argv.empty()) {
         return RESPEncoder::error("ERR empty command");
     }
+
+    auto appendIfNeeded = [&](bool isWriteCommand) -> std::string {
+        if (!isWriteCommand || replayingAof || !aof_.enabled()) {
+            return "";
+        }
+
+        std::string err;
+        if (!aof_.appendCommand(argv, err)) {
+            return RESPEncoder::error("ERR AOF append failed: " + err);
+        }
+        return "";
+    };
 
     const std::string cmd = toUpperCopy(argv[0]);
 
@@ -79,6 +118,9 @@ std::string CommandDispatcher::dispatch(const std::vector<std::string>& argv) {
             return wrongArity("set");
         }
         db_.set(argv[1], argv[2]);
+        if (const std::string appendErr = appendIfNeeded(true); !appendErr.empty()) {
+            return appendErr;
+        }
         return RESPEncoder::simpleString("OK");
     }
 
@@ -88,6 +130,9 @@ std::string CommandDispatcher::dispatch(const std::vector<std::string>& argv) {
         }
         for (size_t i = 1; i + 1 < argv.size(); i += 2) {
             db_.set(argv[i], argv[i + 1]);
+        }
+        if (const std::string appendErr = appendIfNeeded(true); !appendErr.empty()) {
+            return appendErr;
         }
         return RESPEncoder::simpleString("OK");
     }
@@ -128,6 +173,9 @@ std::string CommandDispatcher::dispatch(const std::vector<std::string>& argv) {
         for (size_t i = 1; i < argv.size(); ++i) {
             removed += db_.del(argv[i]);
         }
+        if (const std::string appendErr = appendIfNeeded(true); !appendErr.empty()) {
+            return appendErr;
+        }
         return RESPEncoder::integer(removed);
     }
 
@@ -152,6 +200,9 @@ std::string CommandDispatcher::dispatch(const std::vector<std::string>& argv) {
         if (!db_.incrBy(argv[1], 1, newValue, err)) {
             return RESPEncoder::error("ERR " + err);
         }
+        if (const std::string appendErr = appendIfNeeded(true); !appendErr.empty()) {
+            return appendErr;
+        }
         return RESPEncoder::integer(newValue);
     }
 
@@ -164,6 +215,9 @@ std::string CommandDispatcher::dispatch(const std::vector<std::string>& argv) {
         std::string err;
         if (!db_.incrBy(argv[1], -1, newValue, err)) {
             return RESPEncoder::error("ERR " + err);
+        }
+        if (const std::string appendErr = appendIfNeeded(true); !appendErr.empty()) {
+            return appendErr;
         }
         return RESPEncoder::integer(newValue);
     }
@@ -183,6 +237,9 @@ std::string CommandDispatcher::dispatch(const std::vector<std::string>& argv) {
         if (!db_.incrBy(argv[1], delta, newValue, err)) {
             return RESPEncoder::error("ERR " + err);
         }
+        if (const std::string appendErr = appendIfNeeded(true); !appendErr.empty()) {
+            return appendErr;
+        }
         return RESPEncoder::integer(newValue);
     }
 
@@ -196,7 +253,11 @@ std::string CommandDispatcher::dispatch(const std::vector<std::string>& argv) {
             return RESPEncoder::error("ERR value is not an integer or out of range");
         }
 
-        return RESPEncoder::integer(db_.expire(argv[1], ttlSeconds));
+        const int result = db_.expire(argv[1], ttlSeconds);
+        if (const std::string appendErr = appendIfNeeded(true); !appendErr.empty()) {
+            return appendErr;
+        }
+        return RESPEncoder::integer(result);
     }
 
     if (cmd == "TTL") {
@@ -217,7 +278,11 @@ std::string CommandDispatcher::dispatch(const std::vector<std::string>& argv) {
         if (argv.size() != 2) {
             return wrongArity("persist");
         }
-        return RESPEncoder::integer(db_.persist(argv[1]));
+        const int result = db_.persist(argv[1]);
+        if (const std::string appendErr = appendIfNeeded(true); !appendErr.empty()) {
+            return appendErr;
+        }
+        return RESPEncoder::integer(result);
     }
 
     return RESPEncoder::error("ERR unknown command '" + argv[0] + "'");
