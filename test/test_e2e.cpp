@@ -16,7 +16,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
-#include "../include/protocol/respParser.hpp"
+#include "protocol/respParser.hpp"
 
 namespace {
 std::string buildRequest(const std::vector<std::string>& argv) {
@@ -37,6 +37,41 @@ std::string getExecutableDir() {
     }
     buf[n] = '\0';
     return std::filesystem::path(buf).parent_path().string();
+}
+
+int connectLoopback(int port) {
+    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        return -1;
+    }
+
+    sockaddr_in addr {};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(static_cast<uint16_t>(port));
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+        ::close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+bool sendAllFd(int fd, const std::string& data) {
+    size_t sent = 0;
+    while (sent < data.size()) {
+        const ssize_t n = ::send(fd, data.data() + sent, data.size() - sent, 0);
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return false;
+        }
+        if (n == 0) {
+            return false;
+        }
+        sent += static_cast<size_t>(n);
+    }
+    return true;
 }
 
 class ServerProcess {
@@ -386,6 +421,93 @@ TEST_F(TinyRedisE2ETest, SplitSingleCommandAcrossTwoWrites) {
     ASSERT_TRUE(client.readReply(out));
     ASSERT_EQ(out.type, RESPType::BULK_STRING);
     EXPECT_EQ(out.str, "v");
+}
+
+TEST_F(TinyRedisE2ETest, CommandErrorDoesNotCloseConnection) {
+    RespClient client;
+    ASSERT_TRUE(client.connectTo(kPort));
+
+    ASSERT_TRUE(client.sendAll(buildRequest({"SET", "n", "abc"})));
+    RESPObject out;
+    ASSERT_TRUE(client.readReply(out));
+    ASSERT_EQ(out.type, RESPType::SIMPLE_STRING);
+    ASSERT_EQ(out.str, "OK");
+
+    ASSERT_TRUE(client.sendAll(buildRequest({"INCR", "n"})));
+    ASSERT_TRUE(client.readReply(out));
+    ASSERT_EQ(out.type, RESPType::ERROR);
+    EXPECT_NE(out.str.find("ERR value is not an integer or out of range"), std::string::npos);
+
+    // 命令错误不应该导致连接关闭；后续请求仍应可用。
+    ASSERT_TRUE(client.sendAll(buildRequest({"PING"})));
+    ASSERT_TRUE(client.readReply(out));
+    ASSERT_EQ(out.type, RESPType::SIMPLE_STRING);
+    EXPECT_EQ(out.str, "PONG");
+}
+
+TEST_F(TinyRedisE2ETest, PipelinedMixedSuccessAndErrorOrder) {
+    RespClient client;
+    ASSERT_TRUE(client.connectTo(kPort));
+
+    const std::string req =
+        buildRequest({"SET", "mix_k", "abc"}) +
+        buildRequest({"INCR", "mix_k"}) +
+        buildRequest({"GET", "mix_k"});
+    ASSERT_TRUE(client.sendAll(req));
+
+    RESPObject out1;
+    ASSERT_TRUE(client.readReply(out1));
+    ASSERT_EQ(out1.type, RESPType::SIMPLE_STRING);
+    EXPECT_EQ(out1.str, "OK");
+
+    RESPObject out2;
+    ASSERT_TRUE(client.readReply(out2));
+    ASSERT_EQ(out2.type, RESPType::ERROR);
+    EXPECT_NE(out2.str.find("ERR value is not an integer or out of range"), std::string::npos);
+
+    RESPObject out3;
+    ASSERT_TRUE(client.readReply(out3));
+    ASSERT_EQ(out3.type, RESPType::BULK_STRING);
+    EXPECT_EQ(out3.str, "abc");
+}
+
+TEST_F(TinyRedisE2ETest, ProtocolErrorDoesNotAffectOtherConnection) {
+    RespClient badClient;
+    RespClient goodClient;
+    ASSERT_TRUE(badClient.connectTo(kPort));
+    ASSERT_TRUE(goodClient.connectTo(kPort));
+
+    ASSERT_TRUE(badClient.sendAll("?\r\n"));
+    RESPObject badReply;
+    ASSERT_TRUE(badClient.readReply(badReply));
+    ASSERT_EQ(badReply.type, RESPType::ERROR);
+    EXPECT_TRUE(badClient.waitClosed());
+
+    ASSERT_TRUE(goodClient.sendAll(buildRequest({"PING"})));
+    RESPObject goodReply;
+    ASSERT_TRUE(goodClient.readReply(goodReply));
+    ASSERT_EQ(goodReply.type, RESPType::SIMPLE_STRING);
+    EXPECT_EQ(goodReply.str, "PONG");
+}
+
+TEST_F(TinyRedisE2ETest, DisconnectDuringPartialCommandDoesNotBreakServer) {
+    const int fd = connectLoopback(kPort);
+    ASSERT_GE(fd, 0);
+
+    const std::string partial = "*3\r\n$3\r\nSET\r\n$5\r\nabort\r\n$5\r\nab";
+    ASSERT_TRUE(sendAllFd(fd, partial));
+    ::close(fd);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    RespClient client;
+    ASSERT_TRUE(client.connectTo(kPort));
+    ASSERT_TRUE(client.sendAll(buildRequest({"PING"})));
+
+    RESPObject out;
+    ASSERT_TRUE(client.readReply(out));
+    ASSERT_EQ(out.type, RESPType::SIMPLE_STRING);
+    EXPECT_EQ(out.str, "PONG");
 }
 
 TEST_F(TinyRedisE2ETest, ProtocolErrorThenConnectionClosed) {

@@ -52,6 +52,35 @@ TEST(CommandParserTest, RejectNonArray) {
     EXPECT_FALSE(err.empty());
 }
 
+TEST(CommandParserTest, RejectEmptyArray) {
+    RESPObject cmd;
+    cmd.type = RESPType::ARRAY;
+
+    std::vector<std::string> argv;
+    std::string err;
+    ASSERT_FALSE(CommandParser::toArgv(cmd, argv, err));
+    EXPECT_EQ(err, "protocol error: empty command");
+}
+
+TEST(CommandParserTest, RejectArrayWithNonStringElement) {
+    RESPObject cmd;
+    cmd.type = RESPType::ARRAY;
+
+    RESPObject e1;
+    e1.type = RESPType::BULK_STRING;
+    e1.str = "GET";
+    RESPObject e2;
+    e2.type = RESPType::INTEGER;
+    e2.integer = 1;
+
+    cmd.elements = {e1, e2};
+
+    std::vector<std::string> argv;
+    std::string err;
+    ASSERT_FALSE(CommandParser::toArgv(cmd, argv, err));
+    EXPECT_EQ(err, "protocol error: command element must be string");
+}
+
 TEST(CommandDispatcherTest, PingSetGetDelFlow) {
     CommandDispatcher dispatcher;
 
@@ -63,6 +92,14 @@ TEST(CommandDispatcherTest, PingSetGetDelFlow) {
     EXPECT_EQ(dispatcher.dispatch({"GET", "name"}), "$-1\r\n");
 }
 
+TEST(CommandDispatcherTest, CaseInsensitiveCommands) {
+    CommandDispatcher dispatcher;
+
+    EXPECT_EQ(dispatcher.dispatch({"set", "k", "v"}), "+OK\r\n");
+    EXPECT_EQ(dispatcher.dispatch({"gEt", "k"}), "$1\r\nv\r\n");
+    EXPECT_EQ(dispatcher.dispatch({"pInG"}), "+PONG\r\n");
+}
+
 TEST(CommandDispatcherTest, ExistsAndIncrFlow) {
     CommandDispatcher dispatcher;
 
@@ -71,6 +108,11 @@ TEST(CommandDispatcherTest, ExistsAndIncrFlow) {
     EXPECT_EQ(dispatcher.dispatch({"INCR", "counter"}), ":2\r\n");
     EXPECT_EQ(dispatcher.dispatch({"GET", "counter"}), "$1\r\n2\r\n");
     EXPECT_EQ(dispatcher.dispatch({"EXISTS", "counter"}), ":1\r\n");
+}
+
+TEST(CommandDispatcherTest, EmptyCommandError) {
+    CommandDispatcher dispatcher;
+    EXPECT_EQ(dispatcher.dispatch({}), "-ERR empty command\r\n");
 }
 
 TEST(CommandDispatcherTest, ErrorPaths) {
@@ -90,6 +132,16 @@ TEST(CommandDispatcherTest, ErrorPaths) {
     EXPECT_EQ(dispatcher.dispatch({"SET", "mx", "9223372036854775807"}), "+OK\r\n");
     EXPECT_EQ(dispatcher.dispatch({"INCR", "mx"}), "-ERR increment or decrement would overflow\r\n");
     EXPECT_EQ(dispatcher.dispatch({"UNKNOWN"}), "-ERR unknown command 'UNKNOWN'\r\n");
+}
+
+TEST(CommandDispatcherTest, DelMultipleKeysCountsOnlyExisting) {
+    CommandDispatcher dispatcher;
+
+    EXPECT_EQ(dispatcher.dispatch({"SET", "a", "1"}), "+OK\r\n");
+    EXPECT_EQ(dispatcher.dispatch({"SET", "b", "2"}), "+OK\r\n");
+    EXPECT_EQ(dispatcher.dispatch({"DEL", "a", "a", "missing", "b"}), ":2\r\n");
+    EXPECT_EQ(dispatcher.dispatch({"EXISTS", "a"}), ":0\r\n");
+    EXPECT_EQ(dispatcher.dispatch({"EXISTS", "b"}), ":0\r\n");
 }
 
 TEST(CommandDispatcherTest, TtlAndPersistFlow) {
@@ -116,6 +168,18 @@ TEST(CommandDispatcherTest, TtlAndPersistFlow) {
     EXPECT_EQ(dispatcher.dispatch({"PERSIST", "k"}), ":0\r\n");
 }
 
+TEST(CommandDispatcherTest, SetClearsExistingTtl) {
+    CommandDispatcher dispatcher;
+
+    EXPECT_EQ(dispatcher.dispatch({"SET", "k", "v1"}), "+OK\r\n");
+    EXPECT_EQ(dispatcher.dispatch({"EXPIRE", "k", "10"}), ":1\r\n");
+    EXPECT_GE(parseIntegerReply(dispatcher.dispatch({"TTL", "k"})), 0);
+
+    EXPECT_EQ(dispatcher.dispatch({"SET", "k", "v2"}), "+OK\r\n");
+    EXPECT_EQ(dispatcher.dispatch({"GET", "k"}), "$2\r\nv2\r\n");
+    EXPECT_EQ(dispatcher.dispatch({"TTL", "k"}), ":-1\r\n");
+}
+
 TEST(CommandDispatcherTest, ExpireImmediatelyDeletesKey) {
     CommandDispatcher dispatcher;
 
@@ -124,6 +188,19 @@ TEST(CommandDispatcherTest, ExpireImmediatelyDeletesKey) {
     EXPECT_EQ(dispatcher.dispatch({"GET", "temp"}), "$-1\r\n");
     EXPECT_EQ(dispatcher.dispatch({"TTL", "temp"}), ":-2\r\n");
     EXPECT_EQ(dispatcher.dispatch({"PTTL", "temp"}), ":-2\r\n");
+}
+
+TEST(CommandDispatcherTest, ExpireMissingKeyReturnsZero) {
+    CommandDispatcher dispatcher;
+    EXPECT_EQ(dispatcher.dispatch({"EXPIRE", "missing", "10"}), ":0\r\n");
+}
+
+TEST(CommandDispatcherTest, ExpireNegativeDeletesKey) {
+    CommandDispatcher dispatcher;
+
+    EXPECT_EQ(dispatcher.dispatch({"SET", "neg", "1"}), "+OK\r\n");
+    EXPECT_EQ(dispatcher.dispatch({"EXPIRE", "neg", "-3"}), ":1\r\n");
+    EXPECT_EQ(dispatcher.dispatch({"EXISTS", "neg"}), ":0\r\n");
 }
 
 TEST(InMemoryDBTTLTest, ActiveExpireCycleRemovesExpiredKeys) {

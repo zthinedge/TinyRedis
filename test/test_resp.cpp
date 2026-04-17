@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <stdexcept>
+
 #include "protocol/respEncoder.hpp"
 #include "protocol/respObject.hpp"
 #include "protocol/respParser.hpp"
@@ -70,4 +72,113 @@ TEST(RESPParserTest, ParseTwoMessagesInSequence) {
     ASSERT_TRUE(parser.parse(out2));
     EXPECT_EQ(out2.type, RESPType::INTEGER);
     EXPECT_EQ(out2.integer, 7);
+}
+
+TEST(RESPParserTest, ParseNullBulkString) {
+    RESPParser parser;
+    const std::string in = "$-1\r\n";
+    parser.feed(in.data(), in.size());
+
+    RESPObject out;
+    ASSERT_TRUE(parser.parse(out));
+    EXPECT_EQ(out.type, RESPType::NULL_BULK);
+}
+
+TEST(RESPParserTest, ParseEmptyArray) {
+    RESPParser parser;
+    const std::string in = "*0\r\n";
+    parser.feed(in.data(), in.size());
+
+    RESPObject out;
+    ASSERT_TRUE(parser.parse(out));
+    EXPECT_EQ(out.type, RESPType::ARRAY);
+    EXPECT_TRUE(out.elements.empty());
+}
+
+TEST(RESPParserTest, ParseArrayWithPartialSecondElement) {
+    RESPParser parser;
+    const std::string partial = "*2\r\n$3\r\nGET\r\n$3\r\nke";
+    parser.feed(partial.data(), partial.size());
+
+    RESPObject out;
+    EXPECT_FALSE(parser.parse(out));
+
+    parser.feed("y\r\n", 3);
+    ASSERT_TRUE(parser.parse(out));
+    ASSERT_EQ(out.type, RESPType::ARRAY);
+    ASSERT_EQ(out.elements.size(), 2u);
+    EXPECT_EQ(out.elements[0].str, "GET");
+    EXPECT_EQ(out.elements[1].str, "key");
+}
+
+TEST(RESPParserTest, IncompleteSimpleStringReturnsFalse) {
+    RESPParser parser;
+    const std::string in = "+PONG\r";
+    parser.feed(in.data(), in.size());
+
+    RESPObject out;
+    EXPECT_FALSE(parser.parse(out));
+}
+
+TEST(RESPParserTest, InvalidTypePrefixThrows) {
+    RESPParser parser;
+    const std::string in = "?\r\n";
+    parser.feed(in.data(), in.size());
+
+    RESPObject out;
+    EXPECT_THROW(parser.parse(out), std::runtime_error);
+}
+
+TEST(RESPParserTest, InvalidIntegerContentThrows) {
+    RESPParser parser;
+    const std::string in = ":abc\r\n";
+    parser.feed(in.data(), in.size());
+
+    RESPObject out;
+    EXPECT_THROW(parser.parse(out), std::exception);
+}
+
+TEST(RESPParserTest, InvalidBulkLengthThrows) {
+    RESPParser parser;
+    const std::string in = "$x\r\n";
+    parser.feed(in.data(), in.size());
+
+    RESPObject out;
+    EXPECT_THROW(parser.parse(out), std::exception);
+}
+
+TEST(RESPParserTest, NullArrayThrows) {
+    RESPParser parser;
+    const std::string in = "*-1\r\n";
+    parser.feed(in.data(), in.size());
+
+    RESPObject out;
+    EXPECT_THROW(parser.parse(out), std::runtime_error);
+}
+
+TEST(RESPParserTest, OverflowIntegerThrows) {
+    RESPParser parser;
+    const std::string in = ":9223372036854775808\r\n";
+    parser.feed(in.data(), in.size());
+
+    RESPObject out;
+    EXPECT_THROW(parser.parse(out), std::exception);
+}
+
+TEST(RESPParserTest, InvalidBulkTerminatorThrows) {
+    RESPParser parser;
+    const std::string in = "$3\r\nabcxx";
+    parser.feed(in.data(), in.size());
+
+    RESPObject out;
+    EXPECT_THROW(parser.parse(out), std::runtime_error);
+}
+
+TEST(RESPParserTest, InvalidArrayLengthThrows) {
+    RESPParser parser;
+    const std::string in = "*x\r\n";
+    parser.feed(in.data(), in.size());
+
+    RESPObject out;
+    EXPECT_THROW(parser.parse(out), std::exception);
 }
