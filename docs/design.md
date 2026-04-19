@@ -1,59 +1,99 @@
 # TinyRedis 设计说明
 
-## 1. 分层
+## 1. 分层架构
 
-项目按层拆分为：
+```text
+Client
+  |
+  v
+net            EpollServer / ClientSession
+  |
+  v
+protocol       RESPParser / RESPEncoder / RESPObject
+  |
+  v
+command        CommandParser / CommandDispatcher
+  |
+  v
+storage        InMemoryDB / RedisObject
+  |
+  v
+core           SDS / DICT
+```
 
-- `core`：基础数据结构（`SDS`、`DICT`）
-- `protocol`：RESP 解析与编码
-- `command`：命令解析与分发
-- `server`：网络与事件循环（当前为最小 TCP 版本）
+旁路模块：
 
-这样可以让协议层与存储层、网络层解耦，便于独立测试和演进。
+- `persistentence/AOF`：写命令追加与启动恢复。
+- `cron`：事件循环中的周期任务，当前不是独立线程。
 
-## 2. 数据流（目标形态）
+## 2. 主请求链路
 
-1. TCP 读取字节流
-2. RESP 解析器构造 `RESPObject`
-3. 命令层转换为 `argv`
-4. 分发器在 DB 上执行命令
-5. RESP 编码器回写响应
+```text
+Client
+-> EpollServer::handleClientRead
+-> RESPParser::feed / parse
+-> CommandParser::toArgv
+-> CommandDispatcher::dispatch
+-> CommandDispatcher::dispatchInternal
+-> InMemoryDB
+-> RESPEncoder
+-> ClientSession::writeBuf
+-> EpollServer::handleClientWrite
+-> Client
+```
 
-## 3. 核心结构
+核心职责：
 
-### SDS
+- `EpollServer`：负责 `epoll`、`accept`、`recv`、`send`。
+- `RESPParser`：负责请求字节流解析，内部维护读缓冲。
+- `CommandParser`：把 `RESPObject` 转成 `argv`。
+- `CommandDispatcher`：识别命令、检查参数、调用 DB、管理 AOF。
+- `InMemoryDB`：保存 KV 数据和 TTL 元信息。
+- `RESPEncoder`：生成 Redis RESP 响应。
 
-- 管理字符串内存所有权。
-- 记录 `len` 与 `alloc`。
-- 支持 append 扩容策略。
+## 3. ClientSession
 
-### DICT
+```text
+ClientSession
+├── RESPParser parser
+├── std::string writeBuf
+└── bool closeAfterWrite
+```
 
-- 使用链式冲突处理的哈希表。
-- 当前已支持双表渐进式 rehash（读写操作按步搬迁桶）。
+- 没有单独 `readBuf`：读缓冲在 `RESPParser` 内部，用于处理半包/粘包。
+- `writeBuf` 放在 session 中：非阻塞 `send` 可能一次发不完，需要保存剩余响应。
 
-## 4. 协议层
+## 4. AOF
 
-RESP2 支持顺序目标：
+运行时写入：
 
-1. Simple String / Error / Integer / Bulk String / Array
-2. Null 变体
-3. 健壮的分包与半包处理
+```text
+写命令
+-> dispatchInternal(argv, false)
+-> InMemoryDB
+-> AOF::appendCommand
+```
 
-当前解析器为流式接口（`feed + parse`），适合 socket 持续读取场景。
+启动恢复：
 
-## 5. 服务模型
+```text
+EpollServer::init
+-> CommandDispatcher::loadAof
+-> AOF::replay
+-> dispatchInternal(argv, true)
+-> InMemoryDB
+```
 
-- 先做单线程事件循环（贴近 Redis 的基础哲学）。
-- 在协议与命令正确性稳定前，不引入并发复杂度。
-- 当前已落地单线程 `epoll`（LT）循环，支持多连接处理。
-- 每个连接维护独立解析状态（`RESPParser`）和写缓冲区。
-- 事件循环中周期触发命令层 `cron`，执行主动过期抽样清理。
-- 下一步计划：在稳定性验证后做 `ET` 版本对比。
-- 后续只在基准测试证明有必要时再做热点优化。
+`dispatchInternal(argv, true)` 表示当前在回放 AOF，不会再次追加 AOF，避免重启后重复写入。
 
-## 6. 过期模型
+## 5. 过期与 cron
 
-- 过期元数据与值数据分离存储：`key -> expireAt(ms)`。
-- 惰性过期：在 `GET/EXISTS/INCR/DEL/TTL/PTTL/PERSIST` 等访问路径检查并删除已过期键。
-- 主动过期：事件循环定时触发抽样扫描，清理已过期键，降低冷数据长期滞留概率。
+- 惰性过期：访问 key 时检查 TTL。
+- 主动过期：`EpollServer::run` 中周期触发 `CommandDispatcher::cron`。
+- cron 当前运行在线程事件循环中，不是独立线程。
+
+```text
+EpollServer::run
+-> CommandDispatcher::cron
+-> InMemoryDB::activeExpireCycle
+```
