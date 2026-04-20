@@ -11,7 +11,7 @@
 - 协议：RESP2 基础解析与编码。
 - 命令：`PING/SET/MSET/GET/MGET/DEL/EXISTS/INCR/INCRBY/DECR/EXPIRE/TTL/PTTL/PERSIST`。
 - 过期：惰性过期 + cron 主动抽样清理。
-- 持久化：最小 AOF，支持追加写入和启动 replay。
+- 持久化：AOF，支持追加写入、启动 replay 和同步 rewrite。
 - 测试：`test_sds`、`test_dict`、`test_resp`、`test_command`、`test_aof`、`test_e2e`。
 
 ## Now
@@ -24,7 +24,7 @@
 ## Next
 
 - 完善 AOF 错误处理和刷盘策略。
-- 实现 AOF rewrite，避免文件持续膨胀。
+- 增加 AOF rewrite 触发策略与配置项。
 - 补齐 String 常用命令选项。
 - 优化 `InMemoryDB` 与命令层的接口边界。
 

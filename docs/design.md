@@ -23,7 +23,7 @@ core           SDS / DICT
 
 旁路模块：
 
-- `persistentence/AOF`：写命令追加与启动恢复。
+- `persistentence/AOF`：写命令追加、启动恢复与同步重写。
 - `cron`：事件循环中的周期任务，当前不是独立线程。
 
 ## 2. 主请求链路
@@ -85,6 +85,15 @@ EpollServer::init
 ```
 
 `dispatchInternal(argv, true)` 表示当前在回放 AOF，不会再次追加 AOF，避免重启后重复写入。
+
+同步重写：
+
+```text
+REWRITEAOF / BGREWRITEAOF
+-> InMemoryDB::snapshot
+-> 生成 SET / EXPIRE 恢复命令
+-> AOF::rewriteCommands
+```
 
 ## 5. 过期与 cron
 
