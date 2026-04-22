@@ -65,6 +65,8 @@ ClientSession
 
 ## 4. AOF
 
+当前网络服务默认开启 AOF，默认文件为运行目录下的 `appendonly.aof`。AOF 文件不存在时，启动恢复按空库处理。
+
 运行时写入：
 
 ```text
@@ -73,6 +75,13 @@ ClientSession
 -> InMemoryDB
 -> AOF::appendCommand
 ```
+
+写入规则：
+
+- 参与 AOF 的写命令：`SET/MSET/DEL/INCR/INCRBY/DECR/EXPIRE/PERSIST`。
+- 命令参数按 RESP array 编码落盘，复用协议层编码格式。
+- 当前实现每条写命令追加后同步 `fsync`。
+- 当前命令链路先修改内存 DB，再追加 AOF；如果追加失败，会向客户端返回 AOF 错误，内存状态不回滚。
 
 启动恢复：
 
@@ -94,6 +103,13 @@ REWRITEAOF / BGREWRITEAOF
 -> 生成 SET / EXPIRE 恢复命令
 -> AOF::rewriteCommands
 ```
+
+重写规则：
+
+- `REWRITEAOF` 与 `BGREWRITEAOF` 当前都走同步重写路径。
+- 重写基于 `InMemoryDB::snapshot` 生成恢复命令，只保留当前仍有效的 key。
+- 每个 key 先生成 `SET key value`；如果 key 有剩余 TTL，再追加 `EXPIRE key seconds`。
+- `AOF::rewriteCommands` 先写入 `appendonly.aof.tmp`，成功 `fsync` 后再原子替换目标文件。
 
 ## 5. 过期与 cron
 

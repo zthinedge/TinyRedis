@@ -15,18 +15,12 @@
 - 测试：`test_sds`、`test_dict`、`test_resp`、`test_command`、`test_aof`、`test_e2e`。
 
 ## Now
-
-- 补齐命令边界测试和错误返回测试。
-- 增强 RESP 半包、粘包、非法输入测试。
-- 保持 README、设计文档和代码结构一致。
-- 默认保证 `ctest --output-on-failure` 通过。
+- 更新文档
+- AOF语义和配置补强
 
 ## Next
 
-- 完善 AOF 错误处理和刷盘策略。
-- 增加 AOF rewrite 触发策略与配置项。
-- 补齐 String 常用命令选项。
-- 优化 `InMemoryDB` 与命令层的接口边界。
+- 测试性能
 
 ## Later
 
