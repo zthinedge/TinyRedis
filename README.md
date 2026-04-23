@@ -133,12 +133,10 @@ ctest --test-dir build --output-on-failure
 
 ## 文档索引
 - [设计说明](docs/design.md)
+- [性能基线](perf/README.md)
 - 任务拆分与进度跟踪以 GitHub `Issues/Projects` 为主
 
 ## 性能摘要
-```text
-1. 纯内存基线：appendonly no
-2. AOF everysec：appendonly yes + appendfsync everysec
-3. AOF always：appendonly yes + appendfsync always
+当前已记录第一版性能基线，包括 AOF 策略对比和 no AOF 不同客户端数的并发基线。
 
-```
+详见：[perf/README.md](perf/README.md)
