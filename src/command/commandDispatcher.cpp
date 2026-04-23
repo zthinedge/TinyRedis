@@ -54,8 +54,8 @@ std::string encodeMGetReply(const std::vector<MGetValue>& values) {
 }
 } // namespace
 
-CommandDispatcher::CommandDispatcher(bool enableAof, std::string aofPath)
-    : db_(), aof_(enableAof, std::move(aofPath)), lastError_() {}
+CommandDispatcher::CommandDispatcher(bool enableAof, std::string aofPath, AofFsyncPolicy fsyncPolicy)
+    : db_(), aof_(enableAof, std::move(aofPath), fsyncPolicy), lastError_() {}
 
 bool CommandDispatcher::loadAof() {
     lastError_.clear();
@@ -98,6 +98,11 @@ bool CommandDispatcher::rewriteAof(std::string& err) {
 
 void CommandDispatcher::cron() {
     (void)db_.activeExpireCycle(kActiveExpireSampleCount);
+
+    std::string err;
+    if (!aof_.flushIfNeeded(err)) {
+        lastError_ = "AOF fsync failed: " + err;
+    }
 }
 
 std::string CommandDispatcher::dispatch(const std::vector<std::string>& argv) {

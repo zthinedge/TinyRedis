@@ -43,6 +43,43 @@ TEST(AOFTest, AppendAndReplayRestoresState) {
     (void)std::filesystem::remove(path);
 }
 
+TEST(AOFTest, EverySecPolicyAppendsAndReplays) {
+    const std::string path = tempAofPath("everysec");
+    (void)std::filesystem::remove(path);
+
+    {
+        CommandDispatcher writer(true, path, AofFsyncPolicy::EverySec);
+        EXPECT_EQ(writer.dispatch({"SET", "k", "1"}), "+OK\r\n");
+        writer.cron();
+    }
+
+    {
+        CommandDispatcher reader(true, path, AofFsyncPolicy::EverySec);
+        ASSERT_TRUE(reader.loadAof()) << reader.lastError();
+        EXPECT_EQ(reader.dispatch({"GET", "k"}), "$1\r\n1\r\n");
+    }
+
+    (void)std::filesystem::remove(path);
+}
+
+TEST(AOFTest, NoFsyncPolicyStillAppendsAndReplays) {
+    const std::string path = tempAofPath("nofsync");
+    (void)std::filesystem::remove(path);
+
+    {
+        CommandDispatcher writer(true, path, AofFsyncPolicy::No);
+        EXPECT_EQ(writer.dispatch({"SET", "k", "v"}), "+OK\r\n");
+    }
+
+    {
+        CommandDispatcher reader(true, path, AofFsyncPolicy::No);
+        ASSERT_TRUE(reader.loadAof()) << reader.lastError();
+        EXPECT_EQ(reader.dispatch({"GET", "k"}), "$1\r\nv\r\n");
+    }
+
+    (void)std::filesystem::remove(path);
+}
+
 TEST(AOFTest, FailedWriteCommandIsNotAppended) {
     const std::string path = tempAofPath("failed_cmd");
     (void)std::filesystem::remove(path);

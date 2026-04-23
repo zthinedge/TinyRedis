@@ -18,6 +18,7 @@ add_executable(tinyredis
     src/command/inMemoryDB.cpp
     src/command/commandParser.cpp
     src/command/commandDispatcher.cpp
+    src/config/serverConfig.cpp
     src/persistentence/aof.cpp
     src/net/epollServer.cpp
 )
@@ -72,6 +73,21 @@ target_link_libraries(test_resp
 target_include_directories(test_resp PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 add_test(NAME RespTests COMMAND test_resp)
+
+# Config 测试
+add_executable(test_config
+    test/test_config.cpp
+    src/config/serverConfig.cpp
+)
+
+target_link_libraries(test_config
+    GTest::gtest
+    GTest::gtest_main
+)
+
+target_include_directories(test_config PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
+add_test(NAME ConfigTests COMMAND test_config)
 
 # Command 测试
 add_executable(test_command

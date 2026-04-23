@@ -12,6 +12,7 @@
 #include <netinet/in.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <utility>
 #include <unistd.h>
 
 namespace {
@@ -20,10 +21,23 @@ constexpr int kMaxEvents = 128;
 constexpr int kEpollWaitTimeoutMs = 100;
 constexpr int kCronIntervalMs = 100;
 constexpr size_t kReadBufSize = 4096;
+
+ServerConfig defaultConfigWithPort(int port) {
+    ServerConfig config;
+    config.port = port;
+    return config;
+}
 } // namespace
 
 EpollServer::EpollServer(int port)
-    : port_(port), listenFd_(-1), epollFd_(-1), dispatcher_(true) {}
+    : EpollServer(defaultConfigWithPort(port)) {}
+
+EpollServer::EpollServer(ServerConfig config)
+    : port_(config.port),
+      listenFd_(-1),
+      epollFd_(-1),
+      config_(std::move(config)),
+      dispatcher_(config_.appendOnly, config_.appendFilename, config_.appendFsync) {}
 
 EpollServer::~EpollServer() {
     for (const auto& [fd, _] : clients_) {
@@ -116,7 +130,10 @@ bool EpollServer::init() {
     if (!initEpoll()) {
         return false;
     }
-    std::cout << "TinyRedis(epoll LT) listening on 127.0.0.1:" << port_ << "\n";
+    std::cout << "TinyRedis(epoll LT) listening on 127.0.0.1:" << port_
+              << ", appendonly=" << (config_.appendOnly ? "yes" : "no")
+              << ", appendfilename=" << config_.appendFilename
+              << ", appendfsync=" << aofFsyncPolicyName(config_.appendFsync) << "\n";
     return true;
 }
 

@@ -5,6 +5,7 @@
 #include "../../include/protocol/respParser.hpp"
 
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <fcntl.h>
 #include <fstream>
@@ -34,8 +35,24 @@ bool writeAll(int fd, const char* data, size_t len, std::string& err) {
 }
 } // namespace
 
-AOF::AOF(bool enabled, std::string path)
-    : enabled_(enabled), path_(std::move(path)) {}
+const char* aofFsyncPolicyName(AofFsyncPolicy policy) {
+    switch (policy) {
+    case AofFsyncPolicy::Always:
+        return "always";
+    case AofFsyncPolicy::EverySec:
+        return "everysec";
+    case AofFsyncPolicy::No:
+        return "no";
+    }
+    return "unknown";
+}
+
+AOF::AOF(bool enabled, std::string path, AofFsyncPolicy fsyncPolicy)
+    : enabled_(enabled),
+      path_(std::move(path)),
+      fsyncPolicy_(fsyncPolicy),
+      dirty_(false),
+      lastFsync_(std::chrono::steady_clock::now()) {}
 
 bool AOF::enabled() const {
     return enabled_;
@@ -49,7 +66,11 @@ const std::string& AOF::path() const {
     return path_;
 }
 
-bool AOF::appendCommand(const std::vector<std::string>& argv, std::string& err) const {
+AofFsyncPolicy AOF::fsyncPolicy() const {
+    return fsyncPolicy_;
+}
+
+bool AOF::appendCommand(const std::vector<std::string>& argv, std::string& err) {
     err.clear();
     if (!enabled_) {
         return true;
@@ -63,16 +84,24 @@ bool AOF::appendCommand(const std::vector<std::string>& argv, std::string& err) 
     }
 
     bool ok = writeAll(fd, payload.data(), payload.size(), err);
-    if (ok && ::fsync(fd) != 0) {
+    if (ok && fsyncPolicy_ == AofFsyncPolicy::Always && ::fsync(fd) != 0) {
         err = std::strerror(errno);
         ok = false;
     }
 
-    (void)::close(fd);
+    if (::close(fd) != 0 && ok) {
+        err = std::strerror(errno);
+        ok = false;
+    }
+
+    if (ok && fsyncPolicy_ == AofFsyncPolicy::EverySec) {
+        dirty_ = true;
+    }
+
     return ok;
 }
 
-bool AOF::rewriteCommands(const std::vector<std::vector<std::string>>& commands, std::string& err) const {
+bool AOF::rewriteCommands(const std::vector<std::vector<std::string>>& commands, std::string& err) {
     err.clear();
     if (!enabled_) {
         return true;
@@ -115,7 +144,50 @@ bool AOF::rewriteCommands(const std::vector<std::vector<std::string>>& commands,
         return false;
     }
 
+    dirty_ = false;
+    lastFsync_ = std::chrono::steady_clock::now();
     return true;
+}
+
+bool AOF::flushIfNeeded(std::string& err, bool force) {
+    err.clear();
+    if (!enabled_ || fsyncPolicy_ != AofFsyncPolicy::EverySec || !dirty_) {
+        return true;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    const auto elapsedMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - lastFsync_).count();
+    if (!force && elapsedMs < 1000) {
+        return true;
+    }
+
+    if (!fsyncPath(err)) {
+        return false;
+    }
+
+    dirty_ = false;
+    lastFsync_ = now;
+    return true;
+}
+
+bool AOF::fsyncPath(std::string& err) {
+    const int fd = ::open(path_.c_str(), O_RDWR);
+    if (fd < 0) {
+        err = std::strerror(errno);
+        return false;
+    }
+
+    bool ok = true;
+    if (::fsync(fd) != 0) {
+        err = std::strerror(errno);
+        ok = false;
+    }
+    if (::close(fd) != 0 && ok) {
+        err = std::strerror(errno);
+        ok = false;
+    }
+    return ok;
 }
 
 bool AOF::replay(const std::function<bool(const std::vector<std::string>&, std::string&)>& apply,

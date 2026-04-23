@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../config/serverConfig.hpp"
 #include "../command/commandDispatcher.hpp"
 #include "../protocol/respParser.hpp"
 
@@ -9,6 +10,7 @@
 class EpollServer {
 public:
     explicit EpollServer(int port = 6379);
+    explicit EpollServer(ServerConfig config);
     ~EpollServer();
 
     EpollServer(const EpollServer&) = delete;
@@ -41,6 +43,7 @@ private:
     int listenFd_;
     int epollFd_;
 
+    ServerConfig config_;
     CommandDispatcher dispatcher_;
     std::unordered_map<int, ClientSession> clients_;
 };

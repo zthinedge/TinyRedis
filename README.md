@@ -18,7 +18,7 @@ TinyRedis 当前采用单线程 `epoll` 事件循环模型，主请求链路按 
 
 - 请求链路：`Client -> EpollServer -> RESPParser -> CommandParser -> CommandDispatcher -> InMemoryDB`
 - 响应链路：`CommandDispatcher -> RESPEncoder -> ClientSession::writeBuf -> handleClientWrite -> Client`
-- 持久化旁路：AOF 负责写命令追加、启动恢复与同步重写
+- 持久化旁路：AOF 负责写命令追加、启动恢复、同步重写与可配置 fsync 策略
 - cron 任务：当前不是独立线程，而是在 `EpollServer::run` 事件循环中周期触发 `CommandDispatcher::cron`
 
 ### 架构图
@@ -28,8 +28,9 @@ TinyRedis 当前采用单线程 `epoll` 事件循环模型，主请求链路按 
 ## 当前能力概览
 - 已实现命令：`PING/SET/MSET/GET/MGET/DEL/EXISTS/INCR/INCRBY/DECR/EXPIRE/TTL/PTTL/PERSIST/REWRITEAOF/BGREWRITEAOF`
 - 过期策略：惰性过期（访问时检查）+ 主动过期（事件循环周期触发抽样清理）
-- 持久化：AOF（写命令追加 + 启动重放恢复 + 同步 rewrite）
-- 测试基线：`test_sds`、`test_dict`、`test_resp`、`test_command`、`test_aof`、`test_e2e`（已接入 CTest）
+- 配置：支持配置文件和启动参数设置端口、AOF 开关、AOF 文件路径、`appendfsync` 策略
+- 持久化：AOF（写命令追加 + 启动重放恢复 + 同步 rewrite + `always/everysec/no` fsync 策略）
+- 测试基线：`test_sds`、`test_dict`、`test_resp`、`test_config`、`test_command`、`test_aof`、`test_e2e`（已接入 CTest）
 
 
 ## 目录结构
@@ -42,6 +43,8 @@ TinyRedis/
 │   │   ├── commandDispatcher.hpp
 │   │   ├── commandParser.hpp
 │   │   └── inMemoryDB.hpp
+│   ├── config/                 # 配置文件解析与服务配置结构
+│   │   └── serverConfig.hpp
 │   ├── core/                   # 基础数据结构
 │   │   ├── dict.hpp
 │   │   └── sds.hpp
@@ -60,6 +63,8 @@ TinyRedis/
 │   │   ├── commandDispatcher.cpp
 │   │   ├── commandParser.cpp
 │   │   └── inMemoryDB.cpp
+│   ├── config/
+│   │   └── serverConfig.cpp
 │   ├── core/
 │   │   ├── dict.cpp
 │   │   └── sds.cpp
@@ -75,6 +80,7 @@ TinyRedis/
 ├── test/                       # 单元测试
 │   ├── test_aof.cpp
 │   ├── test_command.cpp
+│   ├── test_config.cpp
 │   ├── test_dict.cpp
 │   ├── test_e2e.cpp
 │   ├── test_resp.cpp
@@ -85,7 +91,8 @@ TinyRedis/
 │   │   └── v0.1.png
 │   ├── design.md
 │   └── roadmap.md
-├── conf/                       # 配置样例（预留）
+├── conf/                       # 配置样例
+│   └── tinyredis.conf
 └── build/                      # CMake 构建目录（已在 .gitignore 中忽略）
 ```
 
@@ -100,6 +107,22 @@ cmake --build build -j
 
 ```bash
 ./build/tinyredis 6380
+```
+
+也可以使用配置文件：
+
+```bash
+./build/tinyredis --config conf/tinyredis.conf
+./build/tinyredis --config conf/tinyredis.conf --port 6380
+```
+
+当前支持的配置项：
+
+```conf
+port 6379
+appendonly yes
+appendfilename appendonly.aof
+appendfsync everysec
 ```
 
 ## 运行测试

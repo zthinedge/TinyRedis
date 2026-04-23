@@ -6,18 +6,19 @@
 
 当前版本已经实现：
 
-- 网络服务：单线程 `epoll` LT 事件循环，监听 `127.0.0.1`，默认端口 `6379`，支持启动参数指定端口。
+- 网络服务：单线程 `epoll` LT 事件循环，监听 `127.0.0.1`，默认端口 `6379`，支持启动参数或配置文件指定端口。
+- 配置系统：支持配置文件设置 `port`、`appendonly`、`appendfilename`、`appendfsync`。
 - 协议层：RESP2 基础解析与编码，支持半包、粘包和连续多条消息解析。
 - 命令层：命令解析、参数校验、大小写不敏感分发、Redis 风格错误响应。
 - 数据层：String 类型 KV 存储，支持基础读写、批量读写、整数自增自减。
 - 过期机制：TTL 元信息、惰性过期、事件循环中周期触发的主动过期。
-- 持久化：AOF 追加写入、启动 replay、同步 rewrite。
-- 测试：SDS、DICT、RESP、Command、AOF 和 TCP E2E 测试均接入 CTest。
+- 持久化：AOF 追加写入、启动 replay、同步 rewrite，并支持 `always/everysec/no` fsync 策略。
+- 测试：SDS、DICT、RESP、Config、Command、AOF 和 TCP E2E 测试均接入 CTest。
 
 当前尚未实现：
 
 - List / Hash / Set / ZSet 等复合数据类型。
-- Redis 配置系统、数据库编号、多客户端事务、复制、RDB、集群。
+- 数据库编号、多客户端事务、复制、RDB、集群。
 - `SET EX/PX/NX/XX` 等命令选项。
 - 真正后台执行的 `BGREWRITEAOF`。
 
@@ -52,6 +53,7 @@ sidecar        AOF / cron
 | `object` | `redisObject.hpp/.cpp` | Redis 对象模型，目前只有 String + RAW 编码 |
 | `protocol` | `respParser.hpp/.cpp`, `respEncoder.hpp/.cpp` | RESP2 请求解析与响应编码 |
 | `command` | `commandParser.hpp/.cpp`, `commandDispatcher.hpp/.cpp` | RESP 对象转 argv、命令分发、参数校验、AOF 调用 |
+| `config` | `serverConfig.hpp/.cpp` | 配置文件解析、服务启动配置 |
 | `storage` | `inMemoryDB.hpp/.cpp` | KV 数据、TTL 元信息、快照导出 |
 | `persistentence` | `aof.hpp/.cpp` | AOF 追加、回放、重写 |
 | `net` | `epollServer.hpp/.cpp` | TCP 监听、非阻塞 IO、epoll 事件循环、客户端会话 |
@@ -174,7 +176,16 @@ ptr      = std::string*
 
 ## 6. AOF 设计
 
-网络服务中的 `CommandDispatcher` 默认开启 AOF，默认文件为运行目录下的 `appendonly.aof`。AOF 文件不存在时，启动恢复按空库处理。
+网络服务中的 `CommandDispatcher` 默认开启 AOF，默认文件为运行目录下的 `appendonly.aof`，默认 `appendfsync always` 以保持旧版本的强刷盘语义。AOF 文件不存在时，启动恢复按空库处理。
+
+启动配置支持：
+
+| 配置项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `port` | `6379` | TCP 监听端口 |
+| `appendonly` | `yes` | 是否开启 AOF |
+| `appendfilename` | `appendonly.aof` | AOF 文件路径 |
+| `appendfsync` | `always` | 支持 `always`、`everysec`、`no` |
 
 AOF 当前触发方式：
 
@@ -195,7 +206,9 @@ AOF 当前触发方式：
 
 - 参与 AOF 的写命令：`SET/MSET/DEL/INCR/INCRBY/DECR/EXPIRE/PERSIST`。
 - 命令参数按 RESP Array 编码落盘，复用协议层编码格式。
-- 当前实现每条写命令追加后同步 `fsync`。
+- `appendfsync always`：每条写命令追加后同步 `fsync`。
+- `appendfsync everysec`：写命令立即追加，`CommandDispatcher::cron` 约每秒触发一次 AOF `fsync`。
+- `appendfsync no`：写命令立即追加，不主动 `fsync`，交给操作系统刷盘。
 - 当前命令链路先修改内存 DB，再追加 AOF；如果追加失败，会向客户端返回 AOF 错误，内存状态不回滚。
 
 启动恢复：
@@ -252,8 +265,9 @@ CTest 当前包含：
 | `SDSTests` | SDS 创建、追加、扩容、移动语义 |
 | `DictTests` | DICT set/get/erase、rehash、遍历 |
 | `RespTests` | RESP 编解码、半包、粘包、非法输入 |
+| `ConfigTests` | 配置文件解析、AOF fsync 策略校验、非法配置拒绝 |
 | `CommandTests` | 命令解析、命令语义、TTL、错误路径 |
-| `AOFTests` | AOF 缺失文件恢复、追加恢复、失败命令不落盘、rewrite、TTL 保留 |
+| `AOFTests` | AOF 缺失文件恢复、追加恢复、fsync 策略、失败命令不落盘、rewrite、TTL 保留 |
 | `E2ETests` | 启动真实 TCP 服务后执行基础命令、批量命令、TTL 流程 |
 
 运行方式：
@@ -268,8 +282,6 @@ ctest --test-dir build --output-on-failure
 
 近期可以优先推进：
 
-- 增加 AOF 配置项：是否启用、文件路径、`fsync` 策略。
 - 将 `BGREWRITEAOF` 改为真正后台重写。
 - 补齐 String 常用命令选项，如 `SET EX/PX/NX/XX`。
-- 增加配置文件或启动参数，避免 AOF 文件固定在运行目录。
 - 扩展 List / Hash / Set / ZSet 数据类型。
