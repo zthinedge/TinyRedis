@@ -136,4 +136,9 @@ ctest --test-dir build --output-on-failure
 - 任务拆分与进度跟踪以 GitHub `Issues/Projects` 为主
 
 ## 性能摘要
-- 当前为功能正确性优先阶段，尚未给出稳定性能基线。
+```text
+1. 纯内存基线：appendonly no
+2. AOF everysec：appendonly yes + appendfsync everysec
+3. AOF always：appendonly yes + appendfsync always
+
+```
