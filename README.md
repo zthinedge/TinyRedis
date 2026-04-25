@@ -146,3 +146,6 @@ ctest --test-dir build --output-on-failure
 当前已记录第一版性能基线，包括 AOF 策略对比和 no AOF 不同客户端数的并发基线。
 
 详见：[perf/README.md](perf/README.md)
+
+## 相关文章
+[从0到1做一个 C++ Redis内核：项目设计与模块拆分](https://blog.csdn.net/2402_87224981/article/details/160474316)
