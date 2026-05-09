@@ -43,6 +43,13 @@ bool RESPParser::parse(RESPObject& out) {
     return true;
 }
 
+size_t RESPParser::pendingBytes() const {
+    if (pos_ >= buffer_.size()) {
+        return 0;
+    }
+    return buffer_.size() - pos_;
+}
+
 bool RESPParser::parseInternal(RESPObject& out) {
     if (pos_ >= buffer_.size()) {
         return false;
@@ -72,6 +79,7 @@ bool RESPParser::parseSimpleString(RESPObject& out) {
     ++pos_;
 
     std::string line;
+
     if (!readLine(line)) {
         return false;
     }

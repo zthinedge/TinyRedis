@@ -386,5 +386,11 @@ bool AOF::replay(const std::function<bool(const std::vector<std::string>&, std::
         }
     }
 
+    // Redis 风格容错：如果文件尾部只剩下一条不完整命令，保留前面已成功回放的数据。
+    // 这样宕机导致的尾部截断不会让整个 AOF 都无法加载。
+    if (parser.pendingBytes() != 0) {
+        return true;
+    }
+
     return true;
 }

@@ -34,6 +34,29 @@ TinyRedis 当前采用单线程 `epoll` 事件循环模型，主请求链路按 
 - 持久化：AOF（写命令追加 + 启动重放恢复 + `REWRITEAOF/BGREWRITEAOF` + `always/everysec/no` fsync 策略）
 - 测试基线：`test_sds`、`test_dict`、`test_resp`、`test_config`、`test_command`、`test_aof`、`test_e2e`（已接入 CTest）
 
+## AOF 行为边界
+
+当前 AOF 模块已经覆盖以下主链路：
+
+- 写命令追加：仅成功执行的写命令才会追加到 AOF
+- 启动恢复：按 RESP 命令流顺序回放，重建内存状态
+- 重写：支持 `REWRITEAOF` 与 `BGREWRITEAOF`
+- 刷盘策略：支持 `appendfsync always/everysec/no`
+
+当前实现的容错/失败语义：
+
+- 如果 AOF 文件尾部只有一条不完整命令，恢复时会保留前面已经成功回放的数据
+- 如果 AOF 中出现明确的 RESP 格式错误，加载会失败
+- 如果 AOF 中命令语义执行失败，例如对字符串 `"abc"` 执行 `INCR`，加载会失败
+- 后台 rewrite 进行中再次发起 `REWRITEAOF/BGREWRITEAOF` 会返回错误
+
+当前未覆盖的更完整能力：
+
+- AOF 校验和
+- 更细粒度的损坏修复策略
+- RDB + AOF 混合持久化
+- rewrite/backlog 级别的更深入性能优化
+
 ## 当前阶段
 
 项目当前处于“核心链路已完成，进入工程化收口与下一阶段主线选择”的阶段。

@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <thread>
 #include <unistd.h>
@@ -140,6 +141,79 @@ TEST(AOFTest, FailedWriteCommandIsNotAppended) {
         EXPECT_EQ(reader.dispatch({"GET", "n"}), "$3\r\nabc\r\n");
     }
 
+    removeAofArtifacts(path);
+}
+
+TEST(AOFTest, TruncatedTailKeepsPreviouslyReplayedState) {
+    const std::string path = tempAofPath("truncated_tail");
+    removeAofArtifacts(path);
+
+    {
+        std::ofstream out(path, std::ios::binary);
+        ASSERT_TRUE(out.good());
+        out << "*3\r\n$3\r\nSET\r\n$2\r\nk1\r\n$2\r\nv1\r\n";
+        out << "*3\r\n$3\r\nSET\r\n$2\r\nk2\r\n$";
+    }
+
+    CommandDispatcher reader(true, path);
+    ASSERT_TRUE(reader.loadAof()) << reader.lastError();
+    EXPECT_EQ(reader.dispatch({"GET", "k1"}), "$2\r\nv1\r\n");
+    EXPECT_EQ(reader.dispatch({"GET", "k2"}), "$-1\r\n");
+
+    removeAofArtifacts(path);
+}
+
+TEST(AOFTest, InvalidRespStillFailsReplay) {
+    const std::string path = tempAofPath("invalid_resp");
+    removeAofArtifacts(path);
+
+    {
+        std::ofstream out(path, std::ios::binary);
+        ASSERT_TRUE(out.good());
+        out << "*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n";
+        out << "#bad\r\n";
+    }
+
+    CommandDispatcher reader(true, path);
+    EXPECT_FALSE(reader.loadAof());
+    EXPECT_NE(reader.lastError().find("AOF parse failed"), std::string::npos);
+
+    removeAofArtifacts(path);
+}
+
+TEST(AOFTest, ReplaySemanticErrorFailsLoad) {
+    const std::string path = tempAofPath("semantic_error");
+    removeAofArtifacts(path);
+
+    {
+        std::ofstream out(path, std::ios::binary);
+        ASSERT_TRUE(out.good());
+        out << "*3\r\n$3\r\nSET\r\n$1\r\nn\r\n$3\r\nabc\r\n";
+        out << "*2\r\n$4\r\nINCR\r\n$1\r\nn\r\n";
+    }
+
+    CommandDispatcher reader(true, path);
+    EXPECT_FALSE(reader.loadAof());
+    EXPECT_NE(reader.lastError().find("AOF replay command failed"), std::string::npos);
+
+    removeAofArtifacts(path);
+}
+
+TEST(AOFTest, RewriteCommandsAreRejectedWhileBackgroundRewriteRuns) {
+    const std::string path = tempAofPath("rewrite_reentrance");
+    removeAofArtifacts(path);
+
+    CommandDispatcher writer(true, path);
+    EXPECT_EQ(writer.dispatch({"SET", "k", "1"}), "+OK\r\n");
+    EXPECT_EQ(writer.dispatch({"BGREWRITEAOF"}), "+OK\r\n");
+
+    const std::string rewriteReply = writer.dispatch({"REWRITEAOF"});
+    EXPECT_NE(rewriteReply.find("background AOF rewrite already in progress"), std::string::npos);
+
+    const std::string bgrewriteReply = writer.dispatch({"BGREWRITEAOF"});
+    EXPECT_NE(bgrewriteReply.find("background AOF rewrite already in progress"), std::string::npos);
+
+    waitForBackgroundRewrite(writer);
     removeAofArtifacts(path);
 }
 
