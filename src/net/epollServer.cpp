@@ -273,7 +273,7 @@ void EpollServer::handleClientWrite(int fd) {
 
     ClientSession& session = it->second;
     while (!session.writeBuf.empty()) {
-        const ssize_t n = ::send(fd, session.writeBuf.data(), session.writeBuf.size(), 0);
+        const ssize_t n = ::send(fd, session.writeBuf.data(), session.writeBuf.size(), 0);//这里是拷贝的副本
         if (n < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 break;
