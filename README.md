@@ -30,7 +30,7 @@ TinyRedis 当前采用单线程 `epoll` 事件循环模型，主请求链路按 
 - 过期策略：惰性过期（访问时检查）+ 主动过期（事件循环周期触发抽样清理）
 - 配置：支持配置文件和启动参数设置端口、AOF 开关、AOF 文件路径、`appendfsync` 策略和 `replicaof` 复制角色
 - 观测：支持 `INFO` 输出 server、clients、stats、persistence、replication 基础指标
-- 复制：支持简化版 master/replica，全量快照命令流同步和后续写命令传播
+- 复制：支持简化版 master/replica，全量快照命令流同步、后续写命令传播、replication backlog、partial resync 和断线重连
 - 持久化：AOF（写命令追加 + 启动重放恢复 + `REWRITEAOF/BGREWRITEAOF` + `always/everysec/no` fsync 策略）
 - 测试基线：`test_sds`、`test_dict`、`test_resp`、`test_config`、`test_command`、`test_aof`、`test_e2e`（已接入 CTest）
 
@@ -63,7 +63,7 @@ TinyRedis 当前采用单线程 `epoll` 事件循环模型，主请求链路按 
 
 - 已经具备可运行、可测试、可演示的最小 Redis 内核子集
 - 短期重点不是继续零散堆命令，而是先补齐路线、能力矩阵和展示材料
-- 下一阶段建议在 `List`、`RDB snapshot`、复制增强三条主线中只选一条推进
+- 下一阶段建议在 `List`、`RDB snapshot`、更多复制边界测试三条主线中只选一条推进
 
 
 ## 目录结构

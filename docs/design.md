@@ -13,16 +13,16 @@
 - 数据层：支持 String 与基础 Hash 类型，覆盖基础读写、批量读写、整数自增自减和 Hash 字段操作。
 - 过期机制：TTL 元信息、惰性过期、事件循环中周期触发的主动过期。
 - 观测能力：`INFO` 命令输出服务、连接、命令统计、AOF 与复制基础状态。
-- 复制：支持简化版 master/replica，replica 通过 `replicaof` 连接 master，完成全量快照命令流同步和后续写命令传播。
+- 复制：支持简化版 master/replica，replica 通过 `replicaof` 连接 master，完成全量快照命令流同步、后续写命令传播、replication backlog、partial resync 和断线重连。
 - 持久化：AOF 追加写入、启动 replay、同步 rewrite、后台 `BGREWRITEAOF`，并支持 `always/everysec/no` fsync 策略。
 - 测试：SDS、DICT、RESP、Config、Command、AOF 和 TCP E2E 测试均接入 CTest。
 
 当前尚未实现：
 
 - List / Set / ZSet 等复合数据类型。
-- 数据库编号、多客户端事务、复制 backlog/部分重同步、RDB、集群。
+- 数据库编号、多客户端事务、RDB、集群。
 - `SET EX/PX/NX/XX` 等命令选项。
-- replication backlog、部分重同步和 RDB 级快照同步。
+- RDB 级快照同步、更完整的级联复制和复制一致性边界。
 
 ## 2. 模块划分
 
@@ -57,7 +57,7 @@ sidecar        AOF / cron
 | `command` | `commandParser.hpp/.cpp`, `commandDispatcher.hpp/.cpp` | RESP 对象转 argv、命令分发、参数校验、AOF 调用 |
 | `config` | `serverConfig.hpp/.cpp` | 配置文件解析、服务启动配置 |
 | `metrics` | `serverMetrics.hpp` | 运行期指标：启动时间、连接数、累计连接数、累计命令数 |
-| `replication` | `replicationState.hpp` | 主从复制角色状态、master 地址、复制 offset 骨架 |
+| `replication` | `replicationState.hpp`, `replicationProtocol.hpp` | 主从复制角色状态、master 地址、复制 offset、backlog 和复制协议辅助解析 |
 | `storage` | `inMemoryDB.hpp/.cpp` | KV 数据、TTL 元信息、快照导出 |
 | `persistentence` | `aof.hpp/.cpp` | AOF 追加、回放、重写 |
 | `net` | `epollServer.hpp/.cpp`, `socketUtil.hpp/.cpp`, `clientSession.hpp`, `masterReplicationLink.hpp` | TCP 监听、socket 初始化、epoll 事件循环、客户端会话与主从复制链路状态 |
@@ -174,6 +174,7 @@ Hash 命令规则：
 | --- | --- | --- | --- |
 | `REPLCONF ...` | 可变参数 | `+OK` | replica 握手命令，当前接受并返回 OK |
 | `PSYNC ? -1` | 2 个参数 | `+FULLRESYNC ...` + 命令流 | 触发简化全量同步；master 返回当前快照命令流并将该连接标记为 replica |
+| `PSYNC <replid> <offset>` | 2 个参数 | `+CONTINUE ...` + backlog 命令流 / `+FULLRESYNC ...` | 如果 replid 匹配且 offset 仍在 backlog 内，执行 partial resync；否则退回全量同步 |
 
 ### 4.9 AOF 命令
 
@@ -297,7 +298,7 @@ BGREWRITEAOF
 
 ## 7. 复制设计
 
-当前实现的是 TinyRedis 简化复制，不实现 Redis RDB 格式、复制 backlog 和部分重同步。
+当前实现的是 TinyRedis 简化复制：不实现 Redis RDB 文件格式，但支持命令流全量同步、replication backlog、partial resync 和 replica 断线重连。
 
 复制启动流程：
 
@@ -307,22 +308,28 @@ replica 配置 replicaof <host> <port>
 -> replica 主动连接 master
 -> 发送 PING / REPLCONF / PSYNC ? -1
 -> master 返回 FULLRESYNC 和当前快照命令流
--> replica 在同一个 epoll 事件循环中回放命令
+-> master 发送 TINYREDIS-SNAPSHOT-END <offset> 内部标记
+-> replica 回放快照命令，看到内部标记后进入增量 streaming
 ```
 
 同步规则：
 
 - 全量同步不发送 RDB，而是把 `InMemoryDB::snapshot()` 转换成 `SET/HSET/EXPIRE` 命令流。
+- `FULLRESYNC <replid> <offset>` 中的 offset 表示快照开始前 master 已有的复制流位置；快照命令本身不写入 backlog。
+- master 成功执行可复制写命令后，会先把该 RESP Array 追加到 backlog 并推进 `masterReplOffset`，再广播给当前在线 replica。
+- replica 在 streaming 阶段每成功回放一条复制命令，就按该命令 RESP 编码长度推进本地 offset。
+- replica 断线后保留已同步的 `masterReplId/masterReplOffset`，重连时发送 `PSYNC <replid> <offset>`。
+- master 如果还能从 backlog 找到 offset 之后的字节，返回 `CONTINUE` 并补发缺失命令；否则返回 `FULLRESYNC` 重新全量同步。
 - master 在 `PSYNC` 后将连接标记为 replica，并记录到 replica fd 集合。
-- master 执行写命令成功后，会把同一条 RESP Array 命令广播给所有 replica。
 - replica 回放复制命令时不追加 AOF，也不会再次向下游传播。
 - replica 当前默认拒绝客户端写命令，返回 `READONLY` 错误。
 
 当前限制：
 
 - 仅支持 IPv4 地址形式的 master host，如 `127.0.0.1`。
-- master 断线后不会自动重连。
-- 不支持部分重同步、复制积压缓冲区、RDB 文件同步。
+- backlog 当前保存在内存中，默认大小为 1MB，服务重启后不会保留。
+- 全量同步使用 TinyRedis 内部命令流和 `TINYREDIS-SNAPSHOT-END` 标记，不兼容 Redis RDB 同步协议。
+- 暂不支持级联复制、ACK 心跳、无盘复制、replid2 故障切换历史。
 
 ## 8. RESP 支持范围
 
@@ -369,4 +376,4 @@ ctest --test-dir build --output-on-failure
 
 - 补齐 String 常用命令选项，如 `SET EX/PX/NX/XX`。
 - 扩展 List / Set / ZSet 数据类型，并继续补全 Hash 常用命令。
-- 增加 replication backlog 和部分重同步。
+- 增加 RDB 级快照同步或继续扩展复制故障恢复边界。

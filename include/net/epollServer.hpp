@@ -7,6 +7,7 @@
 #include "masterReplicationLink.hpp"
 
 #include <string>
+#include <chrono>
 #include <unordered_set>
 #include <unordered_map>
 
@@ -33,10 +34,11 @@ private:
     void handleClientWrite(int fd);
     bool initReplication();
     bool connectToMaster();
+    void reconnectToMasterIfNeeded();
     void handleMasterRead();
     void handleMasterWrite();
     void closeMaster();
-    void broadcastToReplicas(const std::vector<std::string>& argv);
+    void propagateWriteCommand(const std::vector<std::string>& argv);
     void removeReplica(int fd);
 
 private:
@@ -51,4 +53,5 @@ private:
     std::unordered_map<int, ClientSession> clients_;
     std::unordered_set<int> replicaFds_;
     MasterReplicationLink masterLink_;
+    std::chrono::steady_clock::time_point lastMasterReconnectAttempt_;
 };

@@ -1,6 +1,7 @@
 #include "../../include/command/commandDispatcher.hpp"
 
 #include "../../include/protocol/respEncoder.hpp"
+#include "../../include/replication/replicationProtocol.hpp"
 #include <algorithm>
 #include <cctype>
 #include <sstream>
@@ -145,6 +146,7 @@ std::string CommandDispatcher::fullResyncPayload() {
     for (const std::vector<std::string>& argv : snapshotCommands()) {
         out += RESPEncoder::array(argv);
     }
+    out += RESPEncoder::simpleString(ReplicationProtocol::snapshotEndMarker(replication_->masterReplOffset));
     return out;
 }
 
@@ -239,11 +241,17 @@ std::string CommandDispatcher::buildInfoReply(const std::string& section) const 
             out << "master_host:" << replication_->masterHost << "\r\n";
             out << "master_port:" << replication_->masterPort << "\r\n";
             out << "master_link_status:" << (replication_->masterLinkUp ? "up" : "down") << "\r\n";
+            out << "master_replid:" << replication_->masterReplId << "\r\n";
+            out << "slave_repl_offset:" << replication_->masterReplOffset << "\r\n";
         } else {
             out << "role:master\r\n";
             out << "connected_slaves:" << replication_->connectedReplicas << "\r\n";
             out << "master_replid:" << replication_->masterReplId << "\r\n";
             out << "master_repl_offset:" << replication_->masterReplOffset << "\r\n";
+            out << "repl_backlog_active:" << (replication_->replBacklog.empty() ? 0 : 1) << "\r\n";
+            out << "repl_backlog_size:" << replication_->replBacklogSize << "\r\n";
+            out << "repl_backlog_first_byte_offset:" << replication_->replBacklogFirstByteOffset << "\r\n";
+            out << "repl_backlog_histlen:" << replication_->replBacklog.size() << "\r\n";
         }
         out << "\r\n";
     }

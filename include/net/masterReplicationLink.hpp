@@ -9,6 +9,7 @@ enum class MasterSyncState {
     WaitingPong,
     WaitingReplconf,
     WaitingFullResync,
+    LoadingSnapshot,
     Streaming,
 };
 
@@ -17,4 +18,5 @@ struct MasterReplicationLink {
     RESPParser parser;
     std::string writeBuf;
     MasterSyncState state = MasterSyncState::Disconnected;
+    long long pendingFullResyncOffset = 0;
 };

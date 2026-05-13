@@ -3,6 +3,7 @@
 #include "../../include/command/commandParser.hpp"
 #include "../../include/net/socketUtil.hpp"
 #include "../../include/protocol/respEncoder.hpp"
+#include "../../include/replication/replicationProtocol.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -21,6 +22,7 @@ constexpr int kBacklog = 128;
 constexpr int kMaxEvents = 128;
 constexpr int kEpollWaitTimeoutMs = 100;
 constexpr int kCronIntervalMs = 100;
+constexpr int kMasterReconnectIntervalMs = 500;
 constexpr size_t kReadBufSize = 4096;
 
 ServerConfig defaultConfigWithPort(int port) {
@@ -54,7 +56,8 @@ EpollServer::EpollServer(ServerConfig config)
       replication_(config_.replication),
       dispatcher_(config_.appendOnly, config_.appendFilename, config_.appendFsync, &metrics_, &replication_),
       replicaFds_(),
-      masterLink_() {
+      masterLink_(),
+      lastMasterReconnectAttempt_(std::chrono::steady_clock::now()) {
     metrics_.tcpPort.store(port_, std::memory_order_relaxed);
 }
 
@@ -245,7 +248,15 @@ void EpollServer::handleClientRead(int fd) {
                 session.replica = true;
                 replicaFds_.insert(fd);
                 replication_.connectedReplicas = static_cast<int>(replicaFds_.size());
-                session.writeBuf += dispatcher_.fullResyncPayload();
+                long long requestedOffset = -1;
+                const bool wantsPartial =
+                    argv.size() == 3 && argv[1] != "?" && ReplicationProtocol::parseInt64(argv[2], requestedOffset);
+                if (wantsPartial && replication_.canPartialResync(argv[1], requestedOffset)) {
+                    session.writeBuf += RESPEncoder::simpleString("CONTINUE " + replication_.masterReplId);
+                    session.writeBuf += replication_.backlogAfter(requestedOffset);
+                } else {
+                    session.writeBuf += dispatcher_.fullResyncPayload();
+                }
                 continue;
             }
 
@@ -255,7 +266,7 @@ void EpollServer::handleClientRead(int fd) {
                 !replication_.isReplica() &&
                 dispatcher_.isReplicableWriteCommand(argv) &&
                 isOkReply(reply)) {
-                broadcastToReplicas(argv);
+                propagateWriteCommand(argv);
             }
         }
     }
@@ -307,10 +318,13 @@ bool EpollServer::initReplication() {
     if (!replication_.isReplica()) {
         return true;
     }
-    return connectToMaster();
+    (void)connectToMaster();
+    return true;
 }
 
 bool EpollServer::connectToMaster() {
+    lastMasterReconnectAttempt_ = std::chrono::steady_clock::now();
+
     std::string err;
     masterLink_.fd = SocketUtil::createReplicaConnection(replication_.masterHost, replication_.masterPort, err);
     if (masterLink_.fd < 0) {
@@ -322,7 +336,12 @@ bool EpollServer::connectToMaster() {
 
     masterLink_.writeBuf += RESPEncoder::array({"PING"});
     masterLink_.writeBuf += RESPEncoder::array({"REPLCONF", "listening-port", std::to_string(port_)});
-    masterLink_.writeBuf += RESPEncoder::array({"PSYNC", "?", "-1"});
+    if (replication_.hasCachedMasterState) {
+        masterLink_.writeBuf += RESPEncoder::array(
+            {"PSYNC", replication_.masterReplId, std::to_string(replication_.masterReplOffset)});
+    } else {
+        masterLink_.writeBuf += RESPEncoder::array({"PSYNC", "?", "-1"});
+    }
     masterLink_.state = MasterSyncState::WaitingPong;
 
     epoll_event ev {};
@@ -335,6 +354,19 @@ bool EpollServer::connectToMaster() {
     }
 
     return true;
+}
+
+void EpollServer::reconnectToMasterIfNeeded() {
+    if (!replication_.isReplica() || masterLink_.fd >= 0) {
+        return;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    const auto elapsedMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - lastMasterReconnectAttempt_).count();
+    if (elapsedMs >= kMasterReconnectIntervalMs) {
+        (void)connectToMaster();
+    }
 }
 
 void EpollServer::handleMasterWrite() {
@@ -422,11 +454,45 @@ void EpollServer::handleMasterRead() {
             }
 
             if (masterLink_.state == MasterSyncState::WaitingFullResync) {
-                if (obj.type != RESPType::SIMPLE_STRING || obj.str.rfind("FULLRESYNC ", 0) != 0) {
+                if (obj.type != RESPType::SIMPLE_STRING) {
                     closeMaster();
                     return;
                 }
+
+                std::string replId;
+                long long offset = 0;
+                if (ReplicationProtocol::parseFullResync(obj.str, replId, offset)) {
+                    replication_.masterReplId = replId;
+                    masterLink_.pendingFullResyncOffset = offset;
+                    masterLink_.state = MasterSyncState::LoadingSnapshot;
+                    continue;
+                }
+
+                if (ReplicationProtocol::parseContinue(obj.str, replId)) {
+                    if (!replId.empty()) {
+                        replication_.masterReplId = replId;
+                    }
+                    replication_.masterLinkUp = true;
+                    replication_.hasCachedMasterState = true;
+                    masterLink_.state = MasterSyncState::Streaming;
+                    continue;
+                }
+
+                closeMaster();
+                return;
+            }
+
+            if (masterLink_.state == MasterSyncState::LoadingSnapshot &&
+                obj.type == RESPType::SIMPLE_STRING) {
+                long long offset = 0;
+                if (!ReplicationProtocol::parseSnapshotEndMarker(obj.str, offset) ||
+                    offset != masterLink_.pendingFullResyncOffset) {
+                    closeMaster();
+                    return;
+                }
+                replication_.masterReplOffset = offset;
                 replication_.masterLinkUp = true;
+                replication_.hasCachedMasterState = true;
                 masterLink_.state = MasterSyncState::Streaming;
                 continue;
             }
@@ -443,6 +509,9 @@ void EpollServer::handleMasterRead() {
                 closeMaster();
                 return;
             }
+            if (masterLink_.state == MasterSyncState::Streaming) {
+                replication_.masterReplOffset += static_cast<long long>(RESPEncoder::array(argv).size());
+            }
         }
     }
 }
@@ -457,6 +526,7 @@ void EpollServer::closeMaster() {
     masterLink_.parser = RESPParser();
     masterLink_.writeBuf.clear();
     masterLink_.state = MasterSyncState::Disconnected;
+    masterLink_.pendingFullResyncOffset = 0;
 }
 
 void EpollServer::removeReplica(int fd) {
@@ -465,13 +535,13 @@ void EpollServer::removeReplica(int fd) {
     }
 }
 
-void EpollServer::broadcastToReplicas(const std::vector<std::string>& argv) {
+void EpollServer::propagateWriteCommand(const std::vector<std::string>& argv) {
+    const std::string payload = RESPEncoder::array(argv);
+    replication_.appendBacklog(payload);
+
     if (replicaFds_.empty()) {
         return;
     }
-
-    const std::string payload = RESPEncoder::array(argv);
-    replication_.masterReplOffset += static_cast<long long>(payload.size());
 
     std::vector<int> fds(replicaFds_.begin(), replicaFds_.end());
     for (int fd : fds) {
@@ -545,6 +615,7 @@ void EpollServer::run() {
             std::chrono::duration_cast<std::chrono::milliseconds>(now - lastCron).count();
         if (elapsedMs >= kCronIntervalMs) {
             dispatcher_.cron();
+            reconnectToMasterIfNeeded();
             lastCron = now;
         }
     }
