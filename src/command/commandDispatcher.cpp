@@ -149,7 +149,7 @@ std::string CommandDispatcher::fullResyncPayload() {
     out += RESPEncoder::simpleString(ReplicationProtocol::snapshotEndMarker(replication_->masterReplOffset));
     return out;
 }
-
+//回放master的写命令
 bool CommandDispatcher::applyReplicationCommand(const std::vector<std::string>& argv, std::string& err) {
     err.clear();
     const std::string reply = dispatchInternal(argv, true);
@@ -179,7 +179,7 @@ bool CommandDispatcher::isReplicableWriteCommand(const std::vector<std::string>&
     }
     return isWriteCommand(toUpperCopy(argv[0]));
 }
-
+//处理定期key删除（主动过期）
 void CommandDispatcher::cron() {
     (void)db_.activeExpireCycle(kActiveExpireSampleCount);
 

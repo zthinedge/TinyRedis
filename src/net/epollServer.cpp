@@ -313,7 +313,7 @@ void EpollServer::handleClientWrite(int fd) {
         }
     }
 }
-
+//初始化主从复制
 bool EpollServer::initReplication() {
     if (!replication_.isReplica()) {
         return true;
@@ -322,6 +322,7 @@ bool EpollServer::initReplication() {
     return true;
 }
 
+//从节点连接主节点
 bool EpollServer::connectToMaster() {
     lastMasterReconnectAttempt_ = std::chrono::steady_clock::now();
 
@@ -355,7 +356,7 @@ bool EpollServer::connectToMaster() {
 
     return true;
 }
-
+//超时就重连：从节点断开主节点后，定时尝试重连
 void EpollServer::reconnectToMasterIfNeeded() {
     if (!replication_.isReplica() || masterLink_.fd >= 0) {
         return;
@@ -368,7 +369,7 @@ void EpollServer::reconnectToMasterIfNeeded() {
         (void)connectToMaster();
     }
 }
-
+//从节点给主节点发数据，控制命令
 void EpollServer::handleMasterWrite() {
     while (!masterLink_.writeBuf.empty()) {
         const ssize_t n = ::send(masterLink_.fd, masterLink_.writeBuf.data(), masterLink_.writeBuf.size(), 0);
@@ -391,14 +392,14 @@ void EpollServer::handleMasterWrite() {
 
     if (masterLink_.writeBuf.empty()) {
         epoll_event ev {};
-        ev.events = EPOLLIN | EPOLLRDHUP;
+        ev.events = EPOLLIN | EPOLLRDHUP;//EPOLLOUT水平触发，socket能写就无限触发
         ev.data.fd = masterLink_.fd;
         if (::epoll_ctl(epollFd_, EPOLL_CTL_MOD, masterLink_.fd, &ev) < 0) {
             closeMaster();
         }
     }
 }
-
+//从节点收数据
 void EpollServer::handleMasterRead() {
     char buf[kReadBufSize];
 
@@ -534,7 +535,7 @@ void EpollServer::removeReplica(int fd) {
         replication_.connectedReplicas = static_cast<int>(replicaFds_.size());
     }
 }
-
+//命令广播--主从同步
 void EpollServer::propagateWriteCommand(const std::vector<std::string>& argv) {
     const std::string payload = RESPEncoder::array(argv);
     replication_.appendBacklog(payload);
