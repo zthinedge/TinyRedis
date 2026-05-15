@@ -86,7 +86,7 @@ int main(int argc, char* argv[]) {
     }
 
     EpollServer server(config);
-    if (!server.init()) {
+    if (!server.init()) {                                                                                                                                                                           
         std::cerr << "server init failed\n";
         return 1;
     }

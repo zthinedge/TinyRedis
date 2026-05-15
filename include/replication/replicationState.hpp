@@ -12,6 +12,7 @@ enum class ReplicationRole {
 };
 
 struct ReplicationState {
+    //主节点id 供从节点进行复制，同时进行身份校验
     static std::string generateReplId() {
         uint64_t x = static_cast<uint64_t>(
             std::chrono::high_resolution_clock::now().time_since_epoch().count());
@@ -32,14 +33,14 @@ struct ReplicationState {
     ReplicationRole role = ReplicationRole::Master;
     std::string masterHost;
     int masterPort = 0;
-    bool masterLinkUp = false;
+    bool masterLinkUp = false;      //是否连上主节点
     bool hasCachedMasterState = false;
     int connectedReplicas = 0;
     std::string masterReplId = generateReplId();
-    long long masterReplOffset = 0;
+    long long masterReplOffset = 0;         //主节点全局总复制偏移量
     size_t replBacklogSize = 1024 * 1024;
-    std::string replBacklog;        //复制积压缓冲区
-    long long replBacklogFirstByteOffset = 1;
+    std::string replBacklog;        //复制积压缓冲区 主节点专属
+    long long replBacklogFirstByteOffset = 1;       //缓冲区第一个字节的全局偏移量
 
     void becomeMaster() {
         role = ReplicationRole::Master;
@@ -60,7 +61,7 @@ struct ReplicationState {
     bool isReplica() const {
         return role == ReplicationRole::Replica;
     }
-
+    //主节点把需要同步的数据追加到复制积压缓冲区
     void appendBacklog(const std::string& payload) {
         if (payload.empty()) {
             return;
@@ -79,8 +80,9 @@ struct ReplicationState {
             replBacklogFirstByteOffset += static_cast<long long>(extra);
         }
     }
-    //判断是否可以进行增量同步
+    //判断是否可以进行增量同步，True为可以 ，False则进行全量同步
     bool canPartialResync(const std::string& replId, long long offset) const {
+        //offset为已经从节点同步完的最后一个位置
         if (replId != masterReplId || offset < 0 || offset > masterReplOffset) {
             return false;
         }
@@ -89,7 +91,7 @@ struct ReplicationState {
         }
         return offset >= replBacklogFirstByteOffset - 1;
     }
-
+    //在主节点缓冲区中截取的数据
     std::string backlogAfter(long long offset) const {
         if (replBacklog.empty() || offset >= masterReplOffset) {
             return "";
