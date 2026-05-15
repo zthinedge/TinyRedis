@@ -5,9 +5,10 @@
 #include <string>
 #include <utility>
 
+//节点的角色类型 主节点 / 从节点
 enum class ReplicationRole {
-    Master,
-    Replica,
+    Master,     //主节点（写）
+    Replica,        //从节点（只读，同步主节点数据）
 };
 
 struct ReplicationState {
@@ -37,7 +38,7 @@ struct ReplicationState {
     std::string masterReplId = generateReplId();
     long long masterReplOffset = 0;
     size_t replBacklogSize = 1024 * 1024;
-    std::string replBacklog;
+    std::string replBacklog;        //复制积压缓冲区
     long long replBacklogFirstByteOffset = 1;
 
     void becomeMaster() {
@@ -78,7 +79,7 @@ struct ReplicationState {
             replBacklogFirstByteOffset += static_cast<long long>(extra);
         }
     }
-
+    //判断是否可以进行增量同步
     bool canPartialResync(const std::string& replId, long long offset) const {
         if (replId != masterReplId || offset < 0 || offset > masterReplOffset) {
             return false;

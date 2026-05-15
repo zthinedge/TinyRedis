@@ -27,12 +27,39 @@ TinyRedis 当前采用单线程 `epoll` 事件循环模型，主请求链路按 
 
 ## 当前能力概览
 - 已实现命令：`PING/SET/MSET/GET/MGET/DEL/EXISTS/INCR/INCRBY/DECR/EXPIRE/TTL/PTTL/PERSIST/INFO/REWRITEAOF/BGREWRITEAOF`
+- 底层结构：实现 SDS 和 DICT，其中 DICT 支持双哈希表渐进式 rehash，读写删除操作会顺带推进迁移，降低单次扩容抖动
 - 过期策略：惰性过期（访问时检查）+ 主动过期（事件循环周期触发抽样清理）
 - 配置：支持配置文件和启动参数设置端口、AOF 开关、AOF 文件路径、`appendfsync` 策略和 `replicaof` 复制角色
 - 观测：支持 `INFO` 输出 server、clients、stats、persistence、replication 基础指标
 - 复制：支持简化版 master/replica，全量快照命令流同步、后续写命令传播、replication backlog、partial resync 和断线重连
 - 持久化：AOF（写命令追加 + 启动重放恢复 + `REWRITEAOF/BGREWRITEAOF` + `always/everysec/no` fsync 策略）
 - 测试基线：`test_sds`、`test_dict`、`test_resp`、`test_config`、`test_command`、`test_aof`、`test_e2e`（已接入 CTest）
+
+## 项目亮点
+- 网络与协议：基于 `epoll` LT 实现单线程事件循环，RESP2 解析器支持半包、粘包和 pipeline，一次读事件可连续解析多条完整命令。
+- 存储与对象：实现 SDS、DICT、RedisObject 和 InMemoryDB；DICT 使用 Redis 风格双表渐进式 rehash，Hash 类型复用该底层结构。
+- 持久化：AOF 覆盖写命令追加、启动 replay、同步 rewrite、后台 `BGREWRITEAOF`、rewrite buffer 和 `appendfsync` 策略。
+- 主从复制：实现 `PING -> REPLCONF -> PSYNC` 握手、`FULLRESYNC` 命令流全量同步、写命令传播、backlog、partial resync 和 replica 断线重连。
+- 工程验证：使用 GTest 覆盖基础结构、协议、配置、命令、AOF 和 TCP E2E；复制 E2E 覆盖全量同步、增量传播、backlog 补发和重连恢复。
+
+## 复制流程
+```text
+replica 启动
+-> connect master
+-> PING
+-> REPLCONF listening-port <port>
+-> PSYNC ? -1
+-> FULLRESYNC <replid> <offset>
+-> 回放快照命令流
+-> TINYREDIS-SNAPSHOT-END <offset>
+-> 进入 streaming，持续接收 master 写命令
+
+断线重连：
+replica 使用已保存的 <replid, offset> 发送 PSYNC
+-> master 判断 offset 是否仍在 backlog
+-> 命中：CONTINUE + 补发 backlog 缺失命令
+-> 未命中：退回 FULLRESYNC
+```
 
 ## AOF 行为边界
 
@@ -90,6 +117,9 @@ TinyRedis/
 │   │   └── redisObject.hpp
 │   ├── persistentence/         # AOF 持久化模块
 │   │   └── aof.hpp
+│   ├── replication/            # 复制状态和协议辅助函数
+│   │   ├── replicationProtocol.hpp
+│   │   └── replicationState.hpp
 │   └── protocol/               # RESP 协议编解码
 │       ├── respEncoder.hpp
 │       ├── respObject.hpp
@@ -165,6 +195,22 @@ appendfsync everysec
 ## 运行测试
 ```bash
 ctest --test-dir build --output-on-failure
+```
+
+也可以单独运行核心测试：
+
+```bash
+./build/test_dict
+./build/test_command
+./build/test_aof
+./build/test_e2e
+```
+
+其中 `test_e2e` 会启动本机 TCP 服务进程，覆盖客户端命令流、异常连接、主从全量同步、partial resync 和重连同步。
+
+## 简历描述参考
+```text
+TinyRedis：基于 C++17 实现 Redis 兼容内存数据库内核，使用 epoll 单线程事件循环处理 RESP2 pipeline 请求；实现 SDS、渐进式 rehash 字典、String/Hash/TTL 命令、AOF rewrite 和 PSYNC 主从复制，支持 replication backlog、partial resync 与断线重连，并通过 GTest/TCP E2E 覆盖协议、持久化和复制故障场景。
 ```
 
 ## 文档索引
