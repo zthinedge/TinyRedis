@@ -70,7 +70,7 @@ void AOF::setEnabled(bool enabled) {
 const std::string& AOF::path() const {
     return path_;
 }
-
+//刷盘策略
 AofFsyncPolicy AOF::fsyncPolicy() const {
     return fsyncPolicy_;
 }
@@ -110,6 +110,7 @@ bool AOF::appendCommand(const std::vector<std::string>& argv, std::string& err) 
     return ok;
 }
 
+//把命令写成新的aof文件
 bool AOF::rewriteCommands(const std::vector<std::vector<std::string>>& commands, std::string& err) {
     err.clear();
     if (!enabled_) {
@@ -217,7 +218,7 @@ bool AOF::startBackgroundRewrite(const std::vector<std::vector<std::string>>& co
     lastBackgroundRewriteStatus_ = "in_progress";
     return true;
 }
-
+//周期性检查后台rewrite完成没有，完成就追加，替换旧aof
 bool AOF::pollBackgroundRewrite(std::string& err) {
     err.clear();
     if (!backgroundRewriteInProgress_) {
@@ -265,7 +266,7 @@ bool AOF::pollBackgroundRewrite(std::string& err) {
     lastBackgroundRewriteStatus_ = "ok";
     return true;
 }
-
+//后台AOF的状态标记
 bool AOF::backgroundRewriteInProgress() const {
     return backgroundRewriteInProgress_;
 }
@@ -273,7 +274,7 @@ bool AOF::backgroundRewriteInProgress() const {
 const std::string& AOF::lastBackgroundRewriteStatus() const {
     return lastBackgroundRewriteStatus_;
 }
-
+//按需刷盘策略
 bool AOF::flushIfNeeded(std::string& err, bool force) {
     err.clear();
     if (!enabled_ || fsyncPolicy_ != AofFsyncPolicy::EverySec || !dirty_) {
@@ -314,7 +315,7 @@ bool AOF::fsyncPath(std::string& err) {
     }
     return ok;
 }
-
+//追加缓存到临时aof
 bool AOF::appendPayloadToFile(const std::string& path, const std::string& payload, bool append, std::string& err) const {
     err.clear();
     const int flags = O_CREAT | O_WRONLY | (append ? O_APPEND : O_TRUNC);

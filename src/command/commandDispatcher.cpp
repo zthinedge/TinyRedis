@@ -102,11 +102,13 @@ bool CommandDispatcher::rewriteAof(std::string& err) {
     return aof_.rewriteCommands(snapshotCommands(), err);
 }
 
+//后台重写
 bool CommandDispatcher::backgroundRewriteAof(std::string& err) {
     err.clear();
     return aof_.startBackgroundRewrite(snapshotCommands(), err);
 }
 
+//讲当前内存DB状态转化为一组命令
 std::vector<std::vector<std::string>> CommandDispatcher::snapshotCommands() {
     std::vector<DBSnapshotEntry> entries = db_.snapshot();
     std::vector<std::vector<std::string>> commands;
@@ -139,7 +141,7 @@ std::vector<std::vector<std::string>> CommandDispatcher::snapshotCommands() {
 
     return commands;
 }
-
+//生成全量同步数据包
 std::string CommandDispatcher::fullResyncPayload() {
     std::string out = RESPEncoder::simpleString(
         "FULLRESYNC " + replication_->masterReplId + " " + std::to_string(replication_->masterReplOffset));
@@ -263,7 +265,7 @@ std::string CommandDispatcher::dispatchInternal(const std::vector<std::string>& 
     if (argv.empty()) {
         return RESPEncoder::error("ERR empty command");
     }
-
+    //判断当前命令要不要写入aof
     auto appendIfNeeded = [&](bool isWriteCommand) -> std::string {
         if (!isWriteCommand || replayingAof || !aof_.enabled()) {
             return "";

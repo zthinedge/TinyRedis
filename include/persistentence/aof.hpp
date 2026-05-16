@@ -56,7 +56,7 @@ private:
     bool enabled_;
     std::string path_;
     AofFsyncPolicy fsyncPolicy_;
-    bool dirty_;
+    bool dirty_;        //脏标记，用来判断aof文件有新写入但未刷盘
     std::chrono::steady_clock::time_point lastFsync_;
     bool backgroundRewriteInProgress_;
     std::future<BackgroundRewriteResult> backgroundRewriteFuture_;
