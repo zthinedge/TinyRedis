@@ -1,293 +1,144 @@
 # TinyRedis Roadmap
 
-本文档基于当前仓库实现编写，目的不是列一个理想化的 Redis 愿景，而是明确 TinyRedis 现在已经做到哪里、哪些模块算“基础完成”、哪些仍处于“可用但未打透”的阶段，以及接下来最值得投入的路线。
+本文档用于记录 TinyRedis 当前阶段、复习顺序和后续开发取舍。它不是 Redis 功能清单，而是服务于简历项目和面试复盘的工程路线图。
 
-## 1. 当前阶段判断
+## 1. 当前阶段
 
-TinyRedis 当前已经越过“能跑就行”的阶段，进入了：
+TinyRedis 当前已经越过“能跑一个 KV 服务”的阶段，进入：
 
-- 核心链路已打通
-- 基础功能可运行、可测试、可演示
-- 需要补齐底层深度和模块完成度
+- 核心链路基本收口
+- 简历亮点已经具备
+- 需要把已有实现复盘成稳定表达
 
-更具体地说，项目已经具备：
+当前已经具备的能力：
 
 - 单线程 `epoll` 网络模型
-- RESP2 编解码
-- 命令分发链路
-- String 数据类型
-- 基础 Hash 数据类型
-- TTL
-- AOF
-- 简化版主从复制
-- 测试基线与性能基线
+- RESP2 编解码、半包、粘包、pipeline
+- 命令分发链路和统一错误处理
+- SDS 动态字符串
+- DICT 渐进式 rehash 哈希表
+- String / Hash / TTL 命令
+- AOF append、replay、rewrite、BGREWRITEAOF
+- master/replica 复制、全量同步、写命令传播、backlog、partial resync、断线重连
+- 单元测试和 TCP E2E 测试基线
 
-当前最重要的事情不是继续零散加命令，而是先把底层模块做扎实，尤其是你已经明确感觉还不够熟的三块：
+现阶段最重要的事情不是继续堆命令，而是：
 
-1. Hash
-2. AOF
-3. Replication
+1. 把底层结构讲清楚：`SDS`、`DICT`
+2. 把系统链路讲清楚：请求链路、AOF、Replication
+3. 把测试看明白：哪些行为已经验证，哪些还只是功能实现
+4. 把与 Redis 官方实现的差异讲清楚
 
-## 2. 模块完成度
+## 2. 模块优先级
 
-### 2.1 网络 / 协议 / 分发
+| 模块 | 当前状态 | 接下来重点 |
+| --- | --- | --- |
+| 网络 / 协议 / 分发 | 基础版完成 | 讲清 `SET k v` 从 socket 到响应写回的函数链路 |
+| SDS | 底层亮点 | 讲清 `len/alloc/flags`、`buf_` 指针回退和 header 升级 |
+| DICT | 底层亮点 | 讲清双表、链地址法、渐进式 rehash 和查询双表 |
+| String / Hash / TTL | 基础版完成 | 不继续堆命令，先讲清对象模型和过期策略 |
+| AOF | 功能闭环完成 | 讲清 append、fsync、rewrite、bgrewrite 和 rewrite buffer |
+| Replication | 简历亮点 | 讲清握手、全量同步、写传播、backlog、partial resync、断线重连 |
+| 测试 | 已有基线 | 系统阅读 `test_sds/test_dict/test_aof/test_e2e` |
+| Redis 差异 | 需要整理 | 讲清 TinyRedis 保留了什么思想，又简化了什么生产级机制 |
 
-状态：`已完成基础版`
+## 3. 三天复习路线
 
-已具备：
-
-- TCP 服务与 `epoll` 事件循环
-- RESP2 解析、编码、半包/粘包处理
-- 请求到命令执行的完整链路
-- Redis 风格错误响应
-
-当前判断：
-
-- 这一层已经不是当前主要短板
-- 后续更多是围绕稳定性、小边界和性能继续补强
-
-### 2.2 String + TTL
-
-状态：`已完成基础版`
-
-已具备：
-
-- `SET/MSET/GET/MGET`
-- `DEL/EXISTS`
-- `INCR/INCRBY/DECR`
-- `EXPIRE/TTL/PTTL/PERSIST`
-- 惰性过期 + 主动过期
-
-当前判断：
-
-- 这一层足够支撑后续 AOF、复制和更多数据结构
-- 短期不需要继续在 String 命令上大幅扩面
-
-### 2.3 Hash
-
-状态：`基础版已完成，但未完全收口`
-
-当前已支持：
-
-- `HSET`
-- `HGET`
-- `HDEL`
-- `HEXISTS`
-- `HLEN`
-
-当前已经打通的能力：
-
-- Hash 对象模型已接入统一 `RedisObject`
-- Hash 存储已接入 `InMemoryDB`
-- Hash 命令已接入 `CommandDispatcher`
-- `WRONGTYPE` 行为已覆盖
-- Hash 与 TTL 已打通
-- Hash 与 AOF append / replay / rewrite 已打通
-
-为什么说“基础版已完成”：
-
-- 从对象层、存储层、命令层到测试层，Hash 已经形成闭环
-- 它不是“半写到一半”的状态，而是已经能作为一个真实可用的数据类型存在
-
-为什么又说“还没完全收口”：
-
-- 命令面还比较窄，缺少 `HMGET/HGETALL/HKEYS/HVALS/HINCRBY` 等常用命令
-- 还没有形成一份清晰的 Hash 命令边界说明
-- 对 Hash 的性能、边界行为、未来编码演进还没有单独总结
-
-结论：
-
-- 如果问“Hash 做完了吗”，答案是：
-  - `基础 Hash`：算做完了
-  - `完整 Hash 模块`：还没有
-
-### 2.4 AOF
-
-状态：`功能闭环已完成，但理解和稳定性仍需补强`
-
-当前已具备：
-
-- 写命令追加
-- 启动回放恢复
-- `appendfsync always/everysec/no`
-- `REWRITEAOF`
-- `BGREWRITEAOF`
-- Hash 数据参与 AOF 恢复与重写
-
-当前判断：
-
-- AOF 从功能上已经不只是“有个文件写一下”，而是已经有完整闭环
-- 但这个模块仍然值得继续深挖，因为它直接决定项目的系统味和你自己的理解深度
-
-短期最值得补的不是立刻再加功能，而是：
-
-- 吃透普通追加、回放、同步重写、后台重写四条链路
-- 补关键失败路径和边界行为测试
-- 明确 AOF 与内存状态、TTL、Hash 的交互关系
-
-当前这块建议以“收口”为主，而不是继续扩功能面：
-
-- 失败路径测试：覆盖 replay 语义失败、rewrite 重入、格式损坏
-- 尾部损坏容错：允许宕机场景下的不完整尾命令不影响前面有效数据恢复
-- 文档收口：明确哪些场景会容错，哪些场景会直接加载失败
-
-### 2.5 Replication
-
-状态：`基础增强版完成，仍可继续打磨一致性边界`
-
-当前已具备：
-
-- `replicaof` 配置启动
-- replica 主动连接 master
-- `PING/REPLCONF/PSYNC ? -1` 简化握手
-- 全量同步
-- 后续写命令传播
-- replication backlog
-- `PSYNC <replid> <offset>` partial resync
-- replica 断线后自动重连并优先继续同步
-- replica 默认拒绝客户端写命令
-
-为什么它已经具备项目辨识度：
-
-- 主从角色、握手、全量同步、增量传播、backlog 和部分重同步链路已经打通
-- 这说明项目已经跨过“单机 KV”和“只会全量复制”的阶段
-
-仍可继续提升的边界：
-
-- 当前全量同步走的是命令流，不是 RDB
-- backlog 只保存在内存中，重启后无法继续部分重同步
-- 还没有 ACK 心跳、replid2、级联复制和故障切换历史
-
-结论：
-
-- 复制增强主线已经完成一轮，后续更适合转向 RDB 或继续补复制故障边界
-
-## 3. 接下来最合理的开发顺序
-
-这份 roadmap 以“先把底层打透，再统一整理笔记，最后再加 agent”为前提。
-
-### Phase 1: 补齐底层理解和模块收口
+### Day 1: 底层结构 + 测试
 
 目标：
 
-- 不急着扩很多新功能，先把已有核心模块真正吃透
+- 把 SDS 和 DICT 讲成自己的语言
+- 把测试文件扫一遍，知道项目验证了什么
+
+建议顺序：
+
+1. `test_sds.cpp`
+2. `test_dict.cpp`
+3. `test_command.cpp`
+4. `test_aof.cpp`
+5. `test_e2e.cpp`
+
+完成标准：
+
+- 能说出每个测试文件主要验证哪些行为
+- 能挑出 3 个最能体现工程质量的测试点
+
+### Day 2: AOF + Replication
+
+目标：
+
+- 把两个系统模块讲顺
+- 能落到关键函数和文件
+
+建议顺序：
+
+1. AOF：`appendCommand -> flushIfNeeded -> replay -> rewriteCommands -> startBackgroundRewrite -> pollBackgroundRewrite`
+2. Replication：`initReplication -> connectMaster -> handleMasterRead -> fullResyncPayload -> propagateToReplicas`
+
+完成标准：
+
+- 能画出 AOF 四条链路
+- 能画出复制握手、全量同步、写命令传播、断线重连四条链路
+
+### Day 3: Redis 差异 + 简历表达
+
+目标：
+
+- 把项目从“代码会写”整理成“面试能讲”
+
+建议准备：
+
+- TinyRedis 和 Redis 在网络、数据结构、AOF、RDB、复制上的差异
+- 项目的 3 个亮点
+- 项目的 3 个不足
+- 如果继续做，下一步为什么选 RDB 或复制 ACK
+
+完成标准：
+
+- 30 秒能讲项目定位
+- 2 分钟能讲核心架构
+- 5 分钟能讲 AOF 或 Replication
+- 被追问不足时能主动说出 Redis 官方实现更完整在哪里
+
+## 4. 简历优先级
+
+当前最适合写进简历的点：
+
+- C++17 实现 Redis 兼容内存数据库核心链路
+- 基于单线程 `epoll` 实现 TCP 服务，支持 RESP2 pipeline、半包和粘包解析
+- 实现 SDS 和渐进式 rehash 字典，支撑 String / Hash / TTL 存储
+- 实现 AOF append、replay、rewrite、后台重写和多种 fsync 策略
+- 实现简化 PSYNC 主从复制，支持 backlog、partial resync 和断线重连
+- 通过 GTest 和 TCP E2E 测试覆盖协议、命令、AOF 和复制场景
+
+不建议当前继续强调：
+
+- “完整 Redis”
+- “高性能超过 Redis”
+- “支持分布式集群”
+
+这些说法和当前实现不匹配，面试追问时风险较高。
+
+## 5. 后续可选开发
+
+如果复习完成后还想继续增强，建议只选一条主线。
 
 优先级：
 
-1. Hash
-2. AOF
-3. Replication
+1. RDB 快照和基于 RDB 的全量复制
+2. 复制 ACK、心跳、replid2 和故障切换历史
+3. Hash 常用命令补全
+4. `SET EX/PX/NX/XX`
+5. benchmark 和性能报告整理
 
-建议动作：
+当前不建议优先做：
 
-- 先确认 Hash 的边界，决定是否继续补齐常用 Hash 命令
-- 系统复盘 AOF 的四条链路：append / replay / rewrite / bgrewrite
-- 系统复盘 replication 的握手、全量同步、传播和限制
-
-完成标准：
-
-- 你能稳定讲清这三个模块分别解决什么问题
-- 你能画出它们在 TinyRedis 里的数据流
-- 你能清楚说出当前实现和 Redis 正版的差距
-
-### Phase 2: 选择一个底层主线深挖
-
-目标：
-
-- 只做一个真正拉分的内核方向，避免功能碎片化
-
-推荐顺序：
-
-1. `RDB snapshot`
-2. `Replication ACK/replid2/failover history`
-3. `Hash` 常用命令补全
-
-选择建议：
-
-- 如果目标是项目深度和系统辨识度，优先做 RDB 或继续补复制故障边界
-- 如果目标是稳步推进，先做 Hash 补全或 RDB
-
-完成标准：
-
-- 新增能力能够明显提升项目讲述价值
-- 不只是命令数量增加，而是系统能力上了一个层级
-
-### Phase 3: 工程化补强
-
-目标：
-
-- 把项目从“功能已具备”推进到“完成度很高”
-
-建议内容：
-
-- 命令支持矩阵
-- 测试矩阵
-- 关键失败路径测试
-- benchmark 对比流程标准化
-- README / design / roadmap 对齐
-
-完成标准：
-
-- 项目边界清楚
-- 测试入口和能力说明清楚
-- 关键模块的设计文档与代码一致
-
-### Phase 4: 统一整理输出
-
-目标：
-
-- 在底层真正做扎实之后，再统一整理你的笔记、文章和项目介绍
-
-建议内容：
-
-- 按模块整理 Hash / AOF / Replication 复盘
-- 补一版项目演进史
-- 整理一版可直接用于博客或面试的表达材料
-
-说明：
-
-- 这一阶段放在后面更合适，因为那时你的理解已经稳定，不会频繁推翻前面的表述
-
-### Phase 5: Agent 层
-
-目标：
-
-- 把 agent 作为展示层和辅助层接到 TinyRedis 上，而不是反过来干扰内核主线
-
-更合理的接法：
-
-- 读取 `INFO` 后解释服务状态
-- 分析 benchmark 结果
-- 帮助观察主从状态
-- 辅助回归测试和故障复盘
-
-不建议：
-
-- 在底层主线没打稳之前，过早把大量时间投入到 agent 包装上
-
-## 4. 当前最值得做的事
-
-如果完全按你现在的进度来排，接下来最值得做的是：
-
-1. 先把 Hash 定级为“基础版完成”
-2. 再把 AOF 真正吃透
-3. 然后把 Replication 作为下一条硬核主线
-
-如果用一句话总结当前 roadmap：
-
-- 不再优先“加很多功能”
-- 优先“把已有底层做深、做稳、做成亮点”
-
-## 5. 暂不优先事项
-
-短期内不建议优先做：
-
-- 一次性补很多零散小命令
+- 一次性补很多零散命令
 - 同时展开多个新数据结构
-- 过早做大篇幅笔记整理
-- 在底层尚未稳定前先重投入 agent 外层包装
+- 过早做复杂 agent 包装
+- 在复习没收口前大改架构
 
-原因：
+## 6. 一句话路线
 
-- 这些事情会消耗精力，但不一定明显提升项目深度
-- 对 TinyRedis 这种项目来说，真正拉分的是底层链路和系统能力
+`停止盲目加功能，把 SDS、DICT、AOF、Replication、测试和 Redis 差异讲透。`

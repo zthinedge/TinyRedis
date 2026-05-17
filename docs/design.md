@@ -98,6 +98,66 @@ ClientSession
 - 命令名在分发时转大写，因此命令大小写不敏感。
 - 协议解析错误会返回 `-ERR protocol error: ...`，并在严重解析异常后关闭连接。
 
+## 3.1 底层数据结构
+
+### SDS
+
+`SDS` 是项目里的动态字符串结构，主要作为 `DICT` 的 key 使用。对外只保存一个 `buf_` 指针，`buf_` 指向实际数据区，但在 `buf_` 前面连续存放 header。
+
+```text
++ header ----------------+-- data --------+-- tail --+
+| len | alloc | flags    | buf bytes      | '\0'     |
++------------------------+----------------+----------+
+                         ^
+                         buf_
+```
+
+核心字段：
+
+- `len`：当前有效数据长度，获取长度为 O(1)。
+- `alloc`：数据区容量，不包含 header 和末尾 `'\0'`。
+- `flags`：记录 header 类型，当前支持 `TYPE_8/16/32/64`。
+
+设计要点：
+
+- 通过 `buf_ - 1` 读取 `flags`，再根据 `flags & TYPE_MASK` 判断 header 类型。
+- 根据 header 类型计算 header 大小，通过 `buf_ - hdr_size(type)` 找到 header 起始地址。
+- `append` 前先执行 `makeRoomFor(addlen)`。如果空间不足，先计算 `newlen = len + addlen`，再计算扩容后的 `newalloc`。
+- `newlen < 1MB` 时，`newalloc = newlen * 2`；否则 `newalloc = newlen + 1MB`。
+- 如果扩容后 header 类型不变，直接 `realloc`；如果从 `TYPE_8` 升级到 `TYPE_16` 等，需要重新 `malloc` 新 header，复制旧数据，再释放旧内存。
+- `clear` 只把 `len` 置 0，不释放容量，方便后续复用。
+- 拷贝构造和拷贝赋值被禁用，只支持移动语义，避免裸指针浅拷贝导致重复释放。
+
+### DICT
+
+`DICT` 是项目里的哈希表结构，主要用于：
+
+- `InMemoryDB::kv_`：key -> `RedisObject*`
+- `InMemoryDB::expires_`：key -> `expireAtMs`
+- Hash 对象内部 field -> value
+
+核心结构：
+
+```text
+dict
+├── ht[0]      当前主哈希表
+├── ht[1]      rehash 期间的新哈希表
+└── rehashidx  当前迁移到 ht[0] 的哪个 bucket，-1 表示未 rehash
+```
+
+设计要点：
+
+- 冲突处理使用链地址法，`hash(key) & sizemask` 定位 bucket，同一个 bucket 下通过 `dictEntry::next` 串成链表。
+- 正常情况下只使用 `ht[0]`。
+- 当 `ht[0].used >= ht[0].size` 时，创建容量为旧表两倍的 `ht[1]`，并把 `rehashidx` 置为 0，进入渐进式 rehash。
+- `set/get/erase` 会在操作前顺带执行一次 `rehashStep()`。
+- `rehashStep()` 从 `rehashidx` 开始跳过空 bucket，找到一个非空 bucket 后，把该 bucket 链表中的所有节点重新计算 hash 并迁移到 `ht[1]`。
+- rehash 期间查询需要同时查 `ht[0]` 和 `ht[1]`。
+- rehash 期间新插入的 key 只写入 `ht[1]`，避免旧表继续增长。
+- 当 `ht[0].used == 0` 时，释放旧表，把 `ht[1]` 切换为新的 `ht[0]`，`rehashidx` 重置为 -1。
+
+渐进式 rehash 的目的不是提升总搬迁成本，而是避免一次性迁移大量 bucket 导致单次请求延迟突刺。
+
 ## 4. 支持命令
 
 ### 4.1 基础命令
@@ -228,6 +288,15 @@ AOF 当前触发方式：
 - 自动追加：网络服务执行写命令成功后，会自动追加到 AOF。
 - 自动恢复：服务启动时会自动调用 `loadAof` 回放已有 AOF。
 - 手动重写：`REWRITEAOF` 为同步重写；`BGREWRITEAOF` 启动后台任务，由事件循环 `cron` 负责收尾切换。
+- `cron` 不会定时重写 AOF；它只负责 `appendfsync everysec` 的刷盘和后台重写完成后的收尾。
+
+AOF append、fsync、rewrite 是三件不同的事：
+
+```text
+AOF append   记录每条成功写命令
+AOF fsync    决定写入内容什么时候尽量落盘
+AOF rewrite  基于当前内存状态压缩 AOF 文件
+```
 
 运行时写入：
 
@@ -246,6 +315,7 @@ AOF 当前触发方式：
 - `appendfsync everysec`：写命令立即追加，`CommandDispatcher::cron` 约每秒触发一次 AOF `fsync`。
 - `appendfsync no`：写命令立即追加，不主动 `fsync`，交给操作系统刷盘。
 - 当前命令链路先修改内存 DB，再追加 AOF；如果追加失败，会向客户端返回 AOF 错误，内存状态不回滚。
+- `dirty_` 是 `everysec` 策略下的脏标记，表示 AOF 最近有新写入但还没有执行本轮 `fsync`。
 
 启动恢复：
 
@@ -258,6 +328,12 @@ EpollServer::init
 ```
 
 `dispatchInternal(argv, true)` 表示当前在回放 AOF，不会再次追加 AOF，避免重启后重复写入。
+
+`loadAof` 与 `AOF::replay` 通过回调解耦：
+
+- `AOF::replay` 负责打开 AOF 文件、读取内容、用 `RESPParser` 解析 RESP 命令流，并转成 argv。
+- `CommandDispatcher::loadAof` 传入 lambda，负责拿到 argv 后执行 `dispatchInternal(argv, true)`。
+- 这样 AOF 模块不需要知道具体命令语义，命令模块也不需要自己处理文件解析。
 
 同步重写：
 
@@ -294,6 +370,9 @@ BGREWRITEAOF
 
 - `BGREWRITEAOF` 返回后不会阻塞主线程事件循环。
 - rewrite 期间写命令仍会正常执行，并额外进入 rewrite buffer，避免新写入在最终切换时丢失。
+- 后台线程只负责把开始 rewrite 那一刻的快照命令写入 `appendonly.aof.tmp.bg`。
+- `pollBackgroundRewrite` 只有确认后台线程完成后，才会把 `backgroundRewriteBuffer_` 追加到临时文件末尾，再 `rename` 替换旧 AOF。
+- 追加 rewrite buffer 和 `rename` 发生在主线程收尾阶段，当前实现会短暂阻塞事件循环；这是为了保证新 AOF 的顺序是“快照命令 + rewrite 期间新写命令”。
 - `INFO persistence` 暴露 `aof_rewrite_in_progress` 和 `aof_last_bgrewrite_status`。
 
 ## 7. 复制设计
@@ -354,13 +433,13 @@ CTest 当前包含：
 
 | 测试 | 覆盖内容 |
 | --- | --- |
-| `SDSTests` | SDS 创建、追加、扩容、移动语义 |
-| `DictTests` | DICT set/get/erase、rehash、遍历 |
+| `SDSTests` | SDS 创建、追加、容量、移动语义、`TYPE_8 -> TYPE_16` / `TYPE_16 -> TYPE_32` header 升级 |
+| `DictTests` | DICT set/get/erase、多 key、rehash 后查询、移动语义、删除后再插入 |
 | `RespTests` | RESP 编解码、半包、粘包、非法输入 |
 | `ConfigTests` | 配置文件解析、AOF fsync 策略校验、非法配置拒绝 |
-| `CommandTests` | 命令解析、命令语义、TTL、错误路径 |
-| `AOFTests` | AOF 缺失文件恢复、追加恢复、fsync 策略、失败命令不落盘、rewrite、TTL 保留 |
-| `E2ETests` | 启动真实 TCP 服务后执行基础命令、批量命令、TTL 流程 |
+| `CommandTests` | 命令解析、String/Hash/TTL/INFO、错误路径、replica 只读状态 |
+| `AOFTests` | AOF 缺失文件恢复、追加恢复、fsync 策略、尾部截断容错、格式损坏失败、rewrite、后台 rewrite、TTL/Hash 保留 |
+| `E2ETests` | 启动真实 TCP 服务后执行基础命令、pipeline、半包、协议错误、主从全量同步、partial resync、断线重连 |
 
 运行方式：
 
@@ -370,9 +449,29 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-## 10. 后续演进方向
+## 10. 与 Redis 官方实现的主要差异
 
-近期可以优先推进：
+TinyRedis 的目标是复现 Redis 核心链路，不是完整替代 Redis。当前实现保留了事件循环、RESP、对象模型、AOF、复制 backlog 和 partial resync 等关键思想，但做了较多工程简化。
+
+| 方向 | TinyRedis | Redis |
+| --- | --- | --- |
+| 网络事件 | 单线程 `epoll` LT，单进程一个 `epollFd_` | `ae` 事件库，支持 epoll/kqueue/select 等多后端 |
+| 协议 | RESP2 子集 | RESP2/RESP3，协议与客户端行为更完整 |
+| 数据结构 | SDS、DICT、RedisObject 简化版 | SDS、dict、listpack、quicklist、skiplist、intset 等多种编码 |
+| 数据类型 | String、基础 Hash、TTL | String/List/Hash/Set/ZSet/Stream/Bitmap 等 |
+| AOF | append/replay/rewrite/BGREWRITEAOF，基于 RESP 命令流 | AOF 机制更完整，支持更复杂的重写、混合持久化和错误处理 |
+| RDB | 未实现 | 支持 RDB 快照和 RDB + AOF 混合持久化 |
+| 全量复制 | `FULLRESYNC` 后发送 `SET/HSET/EXPIRE` 命令流 | `FULLRESYNC` 后发送 RDB 文件，再进入命令传播 |
+| 部分重同步 | `replid + offset + backlog` 简化版 | 支持 replid/replid2、ACK、offset、backlog、超时等完整复制机制 |
+| 高可用 | 未实现 Sentinel/Cluster | Sentinel、Cluster、故障转移和槽迁移 |
+| 内存管理 | `malloc/free/new/delete` | jemalloc、对象编码、lazyfree、淘汰策略等 |
+
+
+```text
+TinyRedis 保留 Redis 的核心设计思想，但有意识地做了简化。重点不是覆盖所有 Redis 功能，而是打通网络协议、命令分发、内存对象、AOF、主从复制和测试验证这些核心链路。
+```
+
+## 11. 后续可考虑演进方向
 
 - 补齐 String 常用命令选项，如 `SET EX/PX/NX/XX`。
 - 扩展 List / Set / ZSet 数据类型，并继续补全 Hash 常用命令。

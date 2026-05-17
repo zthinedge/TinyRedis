@@ -1,8 +1,8 @@
 # TinyRedis
 ## 项目简介
 TinyRedis 是一个基于 C++17 实现的 Redis 兼容内存数据库内核项目，目标是在贴近真实工程的前提下逐步复现 Redis 的核心能力。  
-当前版本已打通 `epoll` 单线程事件循环、RESP2 编解码、命令解析与分发链路，并支持 String 基础命令、TTL 命令子集、AOF 持久化与简化版主从复制。  
-项目重点关注模块化设计与可测试性（`net/protocol/command/core/object/persistentence` 分层），当前阶段优先完善工程化收口、稳定性增强与后续核心特性的演进路线。
+当前版本已打通 `epoll` 单线程事件循环、RESP2 编解码、命令解析与分发链路，并支持 String、基础 Hash、TTL、AOF 持久化与简化版 PSYNC 主从复制。  
+项目重点关注模块化设计、底层数据结构、持久化、复制和可测试性。
 
 
 ## 开发环境
@@ -25,8 +25,8 @@ TinyRedis 当前采用单线程 `epoll` 事件循环模型，主请求链路按 
 
 ![TinyRedis 架构图](docs/assets/v0.1.png)
 
-## 当前能力概览
-- 已实现命令：`PING/SET/MSET/GET/MGET/DEL/EXISTS/INCR/INCRBY/DECR/EXPIRE/TTL/PTTL/PERSIST/INFO/REWRITEAOF/BGREWRITEAOF`
+## 核心能力
+- 已实现命令：`PING/SET/MSET/GET/MGET/DEL/EXISTS/INCR/INCRBY/DECR/HSET/HGET/HDEL/HEXISTS/HLEN/EXPIRE/TTL/PTTL/PERSIST/INFO/REWRITEAOF/BGREWRITEAOF`
 - 底层结构：实现 SDS 和 DICT，其中 DICT 支持双哈希表渐进式 rehash，读写删除操作会顺带推进迁移，降低单次扩容抖动
 - 过期策略：惰性过期（访问时检查）+ 主动过期（事件循环周期触发抽样清理）
 - 配置：支持配置文件和启动参数设置端口、AOF 开关、AOF 文件路径、`appendfsync` 策略和 `replicaof` 复制角色
@@ -42,55 +42,10 @@ TinyRedis 当前采用单线程 `epoll` 事件循环模型，主请求链路按 
 - 主从复制：实现 `PING -> REPLCONF -> PSYNC` 握手、`FULLRESYNC` 命令流全量同步、写命令传播、backlog、partial resync 和 replica 断线重连。
 - 工程验证：使用 GTest 覆盖基础结构、协议、配置、命令、AOF 和 TCP E2E；复制 E2E 覆盖全量同步、增量传播、backlog 补发和重连恢复。
 
-## 复制流程
-```text
-replica 启动
--> connect master
--> PING
--> REPLCONF listening-port <port>
--> PSYNC ? -1
--> FULLRESYNC <replid> <offset>
--> 回放快照命令流
--> TINYREDIS-SNAPSHOT-END <offset>
--> 进入 streaming，持续接收 master 写命令
 
-断线重连：
-replica 使用已保存的 <replid, offset> 发送 PSYNC
--> master 判断 offset 是否仍在 backlog
--> 命中：CONTINUE + 补发 backlog 缺失命令
--> 未命中：退回 FULLRESYNC
-```
+## 与 Redis 官方实现的主要差异
 
-## AOF 行为边界
-
-当前 AOF 模块已经覆盖以下主链路：
-
-- 写命令追加：仅成功执行的写命令才会追加到 AOF
-- 启动恢复：按 RESP 命令流顺序回放，重建内存状态
-- 重写：支持 `REWRITEAOF` 与 `BGREWRITEAOF`
-- 刷盘策略：支持 `appendfsync always/everysec/no`
-
-当前实现的容错/失败语义：
-
-- 如果 AOF 文件尾部只有一条不完整命令，恢复时会保留前面已经成功回放的数据
-- 如果 AOF 中出现明确的 RESP 格式错误，加载会失败
-- 如果 AOF 中命令语义执行失败，例如对字符串 `"abc"` 执行 `INCR`，加载会失败
-- 后台 rewrite 进行中再次发起 `REWRITEAOF/BGREWRITEAOF` 会返回错误
-
-当前未覆盖的更完整能力：
-
-- AOF 校验和
-- 更细粒度的损坏修复策略
-- RDB + AOF 混合持久化
-- rewrite/backlog 级别的更深入性能优化
-
-## 当前阶段
-
-项目当前处于“核心链路已完成，进入工程化收口与下一阶段主线选择”的阶段。
-
-- 已经具备可运行、可测试、可演示的最小 Redis 内核子集
-- 短期重点不是继续零散堆命令，而是先补齐路线、能力矩阵和展示材料
-- 下一阶段建议在 `List`、`RDB snapshot`、更多复制边界测试三条主线中只选一条推进
+TinyRedis 保留 Redis 的核心设计思想，但当前仍是教学/简历项目级实现：网络层直接使用单线程 `epoll`；全量复制使用命令流而不是 RDB；持久化暂未实现 RDB 和混合持久化；复制暂未实现 ACK、replid2、Sentinel、Cluster 和自动故障转移。更完整对比见 [docs/design.md](docs/design.md)。
 
 
 ## 目录结构
@@ -98,7 +53,7 @@ replica 使用已保存的 <replid, offset> 发送 PSYNC
 TinyRedis/
 ├── CMakeLists.txt
 ├── main.cpp
-├── include/                    # 头文件
+├── include/        # 头文件：net/protocol/command/core/object/persistentence/replication
 │   ├── command/                # 命令解析、分发、DB 接口
 │   │   ├── commandDispatcher.hpp
 │   │   ├── commandParser.hpp
@@ -124,42 +79,11 @@ TinyRedis/
 │       ├── respEncoder.hpp
 │       ├── respObject.hpp
 │       └── respParser.hpp
-├── src/                        # 源码实现
-│   ├── command/
-│   │   ├── commandDispatcher.cpp
-│   │   ├── commandParser.cpp
-│   │   └── inMemoryDB.cpp
-│   ├── config/
-│   │   └── serverConfig.cpp
-│   ├── core/
-│   │   ├── dict.cpp
-│   │   └── sds.cpp
-│   ├── net/
-│   │   ├── epollServer.cpp
-│   │   └── socketUtil.cpp
-│   ├── object/
-│   │   └── redisObject.cpp
-│   ├── persistentence/
-│   │   └── aof.cpp
-│   └── protocol/
-│       ├── respEncoder.cpp
-│       └── respParser.cpp
-├── test/                       # 单元测试
-│   ├── test_aof.cpp
-│   ├── test_command.cpp
-│   ├── test_config.cpp
-│   ├── test_dict.cpp
-│   ├── test_e2e.cpp
-│   ├── test_resp.cpp
-│   └── test_sds.cpp
-├── docs/                       # 设计文档与路线文档
-│   ├── assets/
-│   │   └── v0.1.png
-│   ├── design.md
-│   └── roadmap.md
-├── conf/                       # 配置样例
-│   └── tinyredis.conf
-└── build/                      # CMake 构建目录（已在 .gitignore 中忽略）
+├── src/            # 源码实现
+├── test/           # 单元测试与 TCP E2E 测试
+├── docs/           # 设计文档、路线图、复习画像
+├── conf/           # 配置样例
+└── perf/           # 性能基线
 ```
 
 ## 快速开始
@@ -208,16 +132,11 @@ ctest --test-dir build --output-on-failure
 
 其中 `test_e2e` 会启动本机 TCP 服务进程，覆盖客户端命令流、异常连接、主从全量同步、partial resync 和重连同步。
 
-## 简历描述参考
-```text
-TinyRedis：基于 C++17 实现 Redis 兼容内存数据库内核，使用 epoll 单线程事件循环处理 RESP2 pipeline 请求；实现 SDS、渐进式 rehash 字典、String/Hash/TTL 命令、AOF rewrite 和 PSYNC 主从复制，支持 replication backlog、partial resync 与断线重连，并通过 GTest/TCP E2E 覆盖协议、持久化和复制故障场景。
-```
 
 ## 文档索引
 - [设计说明](docs/design.md)
 - [项目路线图](docs/roadmap.md)
 - [性能基线](perf/README.md)
-- 任务拆分与进度跟踪以 GitHub `Issues/Projects` 为主
 
 ## 性能摘要
 当前已记录第一版性能基线，包括 AOF 策略对比和 no AOF 不同客户端数的并发基线。
