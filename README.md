@@ -23,7 +23,35 @@ TinyRedis 当前采用单线程 `epoll` 事件循环模型，主请求链路按 
 
 ### 架构图
 
-![TinyRedis 架构图](docs/assets/v0.1.png)
+```mermaid
+flowchart TD
+    Client["Client / redis-cli"]
+    Net["net<br/>EpollServer / ClientSession"]
+    Protocol["protocol<br/>RESPParser / RESPEncoder"]
+    Command["command<br/>CommandParser / CommandDispatcher"]
+    Storage["storage<br/>InMemoryDB / RedisObject"]
+    Core["core<br/>SDS / DICT"]
+
+    Client --> Net
+    Net --> Protocol
+    Protocol --> Command
+    Command --> Storage
+    Storage --> Core
+
+    Command --> Protocol
+    Protocol --> Net
+    Net --> Client
+
+    AOF["AOF<br/>append / replay / rewrite"]
+    Cron["cron<br/>expire / fsync / bgrewrite finish"]
+    Repl["replication<br/>FULLRESYNC / backlog / PSYNC"]
+
+    Command -. write command .-> AOF
+    Net -. periodic .-> Cron
+    Cron -. maintenance .-> Command
+    Net -. replica link .-> Repl
+    Command -. propagate writes .-> Repl
+```
 
 ## 核心能力
 - 已实现命令：`PING/SET/MSET/GET/MGET/DEL/EXISTS/INCR/INCRBY/DECR/HSET/HGET/HDEL/HEXISTS/HLEN/EXPIRE/TTL/PTTL/PERSIST/INFO/REWRITEAOF/BGREWRITEAOF`
