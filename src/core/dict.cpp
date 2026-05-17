@@ -14,7 +14,7 @@ size_t hashkey(const SDS& key) {
 bool keyEquals(const SDS& lhs, const SDS& rhs) {
     return std::strcmp(lhs.c_str(), rhs.c_str()) == 0;
 }
-
+//计算 SDS 需要分配的最小 2 的幂次容量
 size_t roundToPowerOfTwo(size_t n) {
     size_t out = 4;
     while (out < n) {
@@ -102,6 +102,7 @@ bool DICT::eraseFromTable(dictht& ht, const SDS& key) {
     return false;
 }
 
+//头插
 void DICT::insertEntryToTable(dictht& ht, dictEntry* entry, size_t hash) {
     const size_t index = hash & ht.sizemask;
     entry->next = ht.table[index];

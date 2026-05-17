@@ -2,13 +2,14 @@
 #include "sds.hpp"
 #include <cstddef>
 #include <functional>
-
+//哈希表节点
 struct dictEntry{
     SDS key;
     void *value;
     dictEntry *next;
 };
 
+//哈希表
 struct dictht{
     dictEntry **table;
     size_t size;
@@ -16,10 +17,12 @@ struct dictht{
     size_t used;
 };
 
+//包含两张表，用于渐进式哈希
 struct dict{
     dictht ht[2];
     long rehashidx;
 };
+
 class DICT{
 public:
     DICT();

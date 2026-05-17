@@ -77,7 +77,7 @@ SDS::SDS(std::string_view str){
 void SDS::init(const char*str,size_t len){
     uint8_t type=select_type(len);
     size_t hdrlen=hdr_size(type);
-
+    //sh为内存的起始位置
     void *sh=malloc(len+hdrlen+1);
     if(!sh)throw std::bad_alloc();
     buf_=(char*)sh+hdrlen;
@@ -101,7 +101,7 @@ void SDS::destroy(){
 SDS::~SDS(){
     destroy();
 }
-
+//移动构造
 SDS::SDS(SDS&& other) noexcept{
     buf_=other.buf_;
     other.buf_=nullptr;
@@ -155,7 +155,7 @@ void SDS::setLen(size_t newlen){
         case TYPE_64:((SdsHdr64*)(buf_-sizeof(SdsHdr64)))->len=newlen;break;
     }
 }
-
+//扩容
 void SDS::makeRoomFor(size_t addlen){
     size_t len=this->len();
     size_t alloc =capacity();
