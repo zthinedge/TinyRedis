@@ -82,34 +82,9 @@ TinyRedis/
 ├── CMakeLists.txt
 ├── main.cpp
 ├── include/        # 头文件：net/protocol/command/core/object/persistentence/replication
-│   ├── command/                # 命令解析、分发、DB 接口
-│   │   ├── commandDispatcher.hpp
-│   │   ├── commandParser.hpp
-│   │   └── inMemoryDB.hpp
-│   ├── config/                 # 配置文件解析与服务配置结构
-│   │   └── serverConfig.hpp
-│   ├── core/                   # 基础数据结构
-│   │   ├── dict.hpp
-│   │   └── sds.hpp
-│   ├── net/                    # 网络与事件循环
-│   │   ├── clientSession.hpp
-│   │   ├── epollServer.hpp
-│   │   ├── masterReplicationLink.hpp
-│   │   └── socketUtil.hpp
-│   ├── object/                 # Redis 对象模型
-│   │   └── redisObject.hpp
-│   ├── persistentence/         # AOF 持久化模块
-│   │   └── aof.hpp
-│   ├── replication/            # 复制状态和协议辅助函数
-│   │   ├── replicationProtocol.hpp
-│   │   └── replicationState.hpp
-│   └── protocol/               # RESP 协议编解码
-│       ├── respEncoder.hpp
-│       ├── respObject.hpp
-│       └── respParser.hpp
 ├── src/            # 源码实现
 ├── test/           # 单元测试与 TCP E2E 测试
-├── docs/           # 设计文档、路线图、复习画像
+├── docs/           # 设计文档与路线图
 ├── conf/           # 配置样例
 └── perf/           # 性能基线
 ```
