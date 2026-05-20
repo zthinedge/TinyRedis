@@ -2,3 +2,4 @@ build/
 compile_commands.json
 appendonly.aof
 appendonly.aof.tmp
+docs/roadmap.md

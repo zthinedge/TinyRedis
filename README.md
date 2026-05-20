@@ -138,7 +138,6 @@ ctest --test-dir build --output-on-failure
 
 ## 文档索引
 - [设计说明](docs/design.md)
-- [项目路线图](docs/roadmap.md)
 - [性能基线](perf/README.md)
 
 ## 性能摘要
