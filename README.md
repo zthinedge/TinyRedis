@@ -6,10 +6,27 @@ TinyRedis 是一个基于 C++17 实现的 Redis 兼容内存数据库内核项�
 
 
 ## 开发环境
-- C++17（`g++`/`clang++`）
+- Linux（当前网络层基于 `epoll`，不支持 Windows/macOS 原生网络层）
+- C++17 编译器（`g++`/`clang++`）
 - CMake >= 3.10
-- GTest（`find_package(GTest REQUIRED)`）
-- Linux（当前网络层基于 `epoll`）
+- GTest（默认开启测试构建；如果只编译服务端，可以通过 `-DBUILD_TESTING=OFF` 跳过）
+
+Ubuntu/Debian 可以先安装依赖：
+
+```bash
+sudo apt update
+sudo apt install -y build-essential cmake libgtest-dev
+```
+
+如果你的发行版安装 `libgtest-dev` 后仍然提示找不到 GTest，通常是系统包没有提供 CMake 配置文件。可以改用发行版提供的 `googletest` 包，或者先从源码安装 GTest 后再重新执行 CMake。
+
+只想编译并运行 TinyRedis 服务端、不运行测试时，可以不安装 GTest：
+
+```bash
+cmake -S . -B build -DBUILD_TESTING=OFF
+cmake --build build -j
+./build/tinyredis
+```
 
 ## 架构设计
 
@@ -90,6 +107,8 @@ TinyRedis/
 ```
 
 ## 快速开始
+拉取代码后，在项目根目录执行：
+
 ```bash
 cmake -S . -B build
 cmake --build build -j
@@ -102,12 +121,24 @@ cmake --build build -j
 ./build/tinyredis 6380
 ```
 
-也可以使用配置文件：
+也可以显式指定配置文件。TinyRedis 默认不会自动读取 `conf/tinyredis.conf`，只有传入 `--config` 或把配置文件路径作为位置参数时才会加载：
 
 ```bash
 ./build/tinyredis --config conf/tinyredis.conf
 ./build/tinyredis --config conf/tinyredis.conf --port 6380
 ```
+
+兼容的位置参数写法：
+
+```bash
+./build/tinyredis 6380
+./build/tinyredis conf/tinyredis.conf
+./build/tinyredis 6380 conf/tinyredis.conf
+```
+
+如果同时指定配置文件和端口参数，命令行端口会覆盖配置文件里的 `port`。
+
+### 配置文件说明
 
 当前支持的配置项：
 
@@ -119,7 +150,17 @@ appendfsync everysec
 # replicaof 127.0.0.1 6379
 ```
 
+- `port`：监听端口，范围 `1..65535`，默认 `6379`
+- `appendonly`：是否开启 AOF，支持 `yes/no`、`true/false`、`1/0`
+- `appendfilename`：AOF 文件路径；相对路径会按启动进程时的当前工作目录解析
+- `appendfsync`：AOF 刷盘策略，支持 `always/everysec/no`
+- `replicaof <host> <port>`：以 replica 模式连接 master；也支持 `replicaof no one` 切回 master 配置
+
+配置文件语法是每行一个指令，`#` 后面是注释。未知指令或参数数量不正确会导致启动失败。
+
 ## 运行测试
+测试依赖 GTest。默认 `BUILD_TESTING=ON` 时会编译测试目标，然后执行：
+
 ```bash
 ctest --test-dir build --output-on-failure
 ```

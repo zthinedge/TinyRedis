@@ -4,8 +4,7 @@ project(TinyRedis LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# 查找系统安装的 GTest
-find_package(GTest REQUIRED)
+include(CTest)
 
 # 添加可执行文件
 add_executable(tinyredis
@@ -26,6 +25,10 @@ add_executable(tinyredis
 
 # 包含头文件目录
 target_include_directories(tinyredis PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
+if(BUILD_TESTING)
+# 查找系统安装的 GTest
+find_package(GTest REQUIRED)
 
 # SDS 测试
 add_executable(test_sds
@@ -150,3 +153,4 @@ target_link_libraries(test_e2e
 target_include_directories(test_e2e PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 add_test(NAME E2ETests COMMAND test_e2e)
+endif()
