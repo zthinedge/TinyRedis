@@ -98,7 +98,7 @@ TinyRedis 保留 Redis 的核心设计思想，但当前仍是教学/简历项�
 TinyRedis/
 ├── CMakeLists.txt
 ├── main.cpp
-├── include/        # 头文件：net/protocol/command/core/object/persistentence/replication
+├── include/        # 头文件：net/protocol/command/core/object/persistence/replication
 ├── src/            # 源码实现
 ├── test/           # 单元测试与 TCP E2E 测试
 ├── docs/           # 设计文档与路线图

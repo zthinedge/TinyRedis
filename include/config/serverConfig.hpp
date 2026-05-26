@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../persistentence/aof.hpp"
+#include "../persistence/aof.hpp"
 #include "../replication/replicationState.hpp"
 
 #include <string>

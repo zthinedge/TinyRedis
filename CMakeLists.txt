@@ -6,6 +6,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(CTest)
 
+set(TINYREDIS_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
 # 添加可执行文件
 add_executable(tinyredis
     main.cpp
@@ -19,12 +21,12 @@ add_executable(tinyredis
     src/command/commandDispatcher.cpp
     src/config/serverConfig.cpp
     src/net/socketUtil.cpp
-    src/persistentence/aof.cpp
+    src/persistence/aof.cpp
     src/net/epollServer.cpp
 )
 
 # 包含头文件目录
-target_include_directories(tinyredis PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(tinyredis PRIVATE ${TINYREDIS_INCLUDE_DIR})
 
 if(BUILD_TESTING)
 # 查找系统安装的 GTest
@@ -41,7 +43,7 @@ target_link_libraries(test_sds
     GTest::gtest_main
 )
 
-target_include_directories(test_sds PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(test_sds PRIVATE ${TINYREDIS_INCLUDE_DIR})
 
 # DICT 测试
 add_executable(test_dict
@@ -55,7 +57,7 @@ target_link_libraries(test_dict
     GTest::gtest_main
 )
 
-target_include_directories(test_dict PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(test_dict PRIVATE ${TINYREDIS_INCLUDE_DIR})
 
 # 启用测试
 enable_testing()
@@ -74,7 +76,7 @@ target_link_libraries(test_resp
     GTest::gtest_main
 )
 
-target_include_directories(test_resp PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(test_resp PRIVATE ${TINYREDIS_INCLUDE_DIR})
 
 add_test(NAME RespTests COMMAND test_resp)
 
@@ -89,7 +91,7 @@ target_link_libraries(test_config
     GTest::gtest_main
 )
 
-target_include_directories(test_config PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(test_config PRIVATE ${TINYREDIS_INCLUDE_DIR})
 
 add_test(NAME ConfigTests COMMAND test_config)
 
@@ -104,7 +106,7 @@ add_executable(test_command
     src/command/inMemoryDB.cpp
     src/command/commandParser.cpp
     src/command/commandDispatcher.cpp
-    src/persistentence/aof.cpp
+    src/persistence/aof.cpp
 )
 
 target_link_libraries(test_command
@@ -112,7 +114,7 @@ target_link_libraries(test_command
     GTest::gtest_main
 )
 
-target_include_directories(test_command PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(test_command PRIVATE ${TINYREDIS_INCLUDE_DIR})
 
 add_test(NAME CommandTests COMMAND test_command)
 
@@ -127,7 +129,7 @@ add_executable(test_aof
     src/command/inMemoryDB.cpp
     src/command/commandParser.cpp
     src/command/commandDispatcher.cpp
-    src/persistentence/aof.cpp
+    src/persistence/aof.cpp
 )
 
 target_link_libraries(test_aof
@@ -135,7 +137,7 @@ target_link_libraries(test_aof
     GTest::gtest_main
 )
 
-target_include_directories(test_aof PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(test_aof PRIVATE ${TINYREDIS_INCLUDE_DIR})
 
 add_test(NAME AOFTests COMMAND test_aof)
 
@@ -150,7 +152,7 @@ target_link_libraries(test_e2e
     GTest::gtest_main
 )
 
-target_include_directories(test_e2e PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(test_e2e PRIVATE ${TINYREDIS_INCLUDE_DIR})
 
 add_test(NAME E2ETests COMMAND test_e2e)
 endif()

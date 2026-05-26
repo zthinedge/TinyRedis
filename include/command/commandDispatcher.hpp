@@ -2,7 +2,7 @@
 
 #include "inMemoryDB.hpp"
 #include "../metrics/serverMetrics.hpp"
-#include "../persistentence/aof.hpp"
+#include "../persistence/aof.hpp"
 #include "../replication/replicationState.hpp"
 #include <string>
 #include <vector>
