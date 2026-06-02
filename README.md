@@ -1,26 +1,40 @@
 # TinyRedis
-## 项目简介
-TinyRedis 是一个基于 C++17 实现的 Redis 兼容内存数据库内核项目，目标是在贴近真实工程的前提下逐步复现 Redis 的核心能力。  
-当前版本已打通 `epoll` 单线程事件循环、RESP2 编解码、命令解析与分发链路，并支持 String、基础 Hash、TTL、AOF 持久化与简化版 PSYNC 主从复制。  
-项目重点关注模块化设计、底层数据结构、持久化、复制和可测试性。
 
+[中文文档](README-CN.md)
 
-## 开发环境
-- Linux（当前网络层基于 `epoll`，不支持 Windows/macOS 原生网络层）
-- C++17 编译器（`g++`/`clang++`）
-- CMake >= 3.10
-- GTest（默认开启测试构建；如果只编译服务端，可以通过 `-DBUILD_TESTING=OFF` 跳过）
+TinyRedis is a Redis-compatible in-memory database kernel implemented in C++17. It is built as a compact systems project that reproduces the core Redis request path while keeping the implementation small enough to study, test, and extend.
 
-Ubuntu/Debian 可以先安装依赖：
+The current version includes a single-threaded `epoll` event loop, RESP2 parsing and encoding, command parsing and dispatch, String and Hash data types, TTL expiration, AOF persistence, runtime `INFO` metrics, and a simplified PSYNC-based master/replica replication flow.
+
+## Highlights
+
+- Single-threaded Linux `epoll` server with non-blocking sockets.
+- RESP2 parser that handles partial packets, sticky packets, and pipelined requests.
+- Redis-style command dispatcher with case-insensitive command names and Redis-like error replies.
+- String, integer, key, Hash, TTL, `INFO`, AOF rewrite, and replication commands.
+- SDS and DICT implementations, including Redis-style incremental rehash for DICT.
+- Lazy expiration on access plus active expiration from the server cron path.
+- AOF append, startup replay, synchronous rewrite, background rewrite, rewrite buffer merge, and `always/everysec/no` fsync policies.
+- Simplified master/replica replication with `PING -> REPLCONF -> PSYNC`, full command-stream resync, backlog-based partial resync, write propagation, and reconnect recovery.
+- GTest coverage for core data structures, RESP, config, command behavior, AOF, and TCP E2E flows.
+
+## Requirements
+
+- Linux. The network layer currently uses `epoll` and binds to `127.0.0.1`.
+- C++17 compiler such as `g++` or `clang++`.
+- CMake 3.10 or newer.
+- GTest when building tests.
+
+On Ubuntu/Debian:
 
 ```bash
 sudo apt update
 sudo apt install -y build-essential cmake libgtest-dev
 ```
 
-如果你的发行版安装 `libgtest-dev` 后仍然提示找不到 GTest，通常是系统包没有提供 CMake 配置文件。可以改用发行版提供的 `googletest` 包，或者先从源码安装 GTest 后再重新执行 CMake。
+If your distribution installs GTest sources but does not provide a CMake package, install the distribution `googletest` package or build and install GTest from source before running CMake with tests enabled.
 
-只想编译并运行 TinyRedis 服务端、不运行测试时，可以不安装 GTest：
+To build only the server without GTest:
 
 ```bash
 cmake -S . -B build -DBUILD_TESTING=OFF
@@ -28,17 +42,102 @@ cmake --build build -j
 ./build/tinyredis
 ```
 
-## 架构设计
+## Quick Start
 
-TinyRedis 当前采用单线程 `epoll` 事件循环模型，主请求链路按 `net -> protocol -> command -> storage -> core` 分层。AOF 不在普通读请求主链路上，只在启动恢复和写命令持久化时参与。
+Build from the project root:
 
+```bash
+cmake -S . -B build
+cmake --build build -j
+```
 
-- 请求链路：`Client -> EpollServer -> RESPParser -> CommandParser -> CommandDispatcher -> InMemoryDB`
-- 响应链路：`CommandDispatcher -> RESPEncoder -> ClientSession::writeBuf -> handleClientWrite -> Client`
-- 持久化旁路：AOF 负责写命令追加、启动恢复、同步/后台重写与可配置 fsync 策略
-- cron 任务：当前不是独立线程，而是在 `EpollServer::run` 事件循环中周期触发 `CommandDispatcher::cron`
+Start TinyRedis:
 
-### 架构图
+```bash
+./build/tinyredis
+```
+
+By default the server listens on `127.0.0.1:6379`. The built-in default configuration enables AOF with `appendonly.aof` and `appendfsync always`.
+
+Connect with `redis-cli`:
+
+```bash
+redis-cli -p 6379
+127.0.0.1:6379> PING
+PONG
+127.0.0.1:6379> SET hello world
+OK
+127.0.0.1:6379> GET hello
+"world"
+```
+
+You can override the port directly:
+
+```bash
+./build/tinyredis 6380
+./build/tinyredis --port 6380
+```
+
+Or start from a config file:
+
+```bash
+./build/tinyredis --config conf/tinyredis.conf
+./build/tinyredis --config conf/tinyredis.conf --port 6380
+```
+
+Compatible positional forms are also supported:
+
+```bash
+./build/tinyredis 6380
+./build/tinyredis conf/tinyredis.conf
+./build/tinyredis 6380 conf/tinyredis.conf
+```
+
+When both a config file and a command-line port are provided, the command-line port wins.
+
+## Configuration
+
+Sample config:
+
+```conf
+port 6379
+appendonly yes
+appendfilename appendonly.aof
+appendfsync everysec
+# replicaof 127.0.0.1 6379
+```
+
+Supported directives:
+
+| Directive | Description |
+| --- | --- |
+| `port <1..65535>` | Listening port. The server binds to loopback. |
+| `appendonly yes/no` | Enable or disable AOF. Also accepts `true/false` and `1/0`. |
+| `appendfilename <path>` | AOF path. Relative paths are resolved from the process working directory. |
+| `appendfsync always/everysec/no` | AOF fsync policy. |
+| `replicaof <host> <port>` | Start as a replica of the given master. The host must be an IPv4 address. |
+| `replicaof no one` | Switch back to master role in config parsing. |
+
+Each non-empty line is one directive. `#` starts a comment. Unknown directives or invalid argument counts fail startup.
+
+## Architecture
+
+TinyRedis follows a layered request path:
+
+```text
+Client
+  -> net:       EpollServer / ClientSession
+  -> protocol:  RESPParser / RESPEncoder
+  -> command:   CommandParser / CommandDispatcher
+  -> storage:   InMemoryDB / RedisObject
+  -> core:      SDS / DICT
+```
+
+Side paths:
+
+- AOF handles write command append, startup replay, rewrite, background rewrite, and fsync.
+- Replication tracks master/replica state, full resync payloads, backlog, partial resync, and write propagation.
+- `CommandDispatcher::cron()` is called periodically from the event loop for active expiration, AOF `everysec` flushing, and background rewrite completion.
 
 ```mermaid
 flowchart TD
@@ -54,7 +153,6 @@ flowchart TD
     Protocol --> Command
     Command --> Storage
     Storage --> Core
-
     Command --> Protocol
     Protocol --> Net
     Net --> Client
@@ -70,122 +168,193 @@ flowchart TD
     Command -. propagate writes .-> Repl
 ```
 
-## 核心能力
-- 已实现命令：`PING/SET/MSET/GET/MGET/DEL/EXISTS/INCR/INCRBY/DECR/HSET/HGET/HDEL/HEXISTS/HLEN/EXPIRE/TTL/PTTL/PERSIST/INFO/REWRITEAOF/BGREWRITEAOF`
-- 底层结构：实现 SDS 和 DICT，其中 DICT 支持双哈希表渐进式 rehash，读写删除操作会顺带推进迁移，降低单次扩容抖动
-- 过期策略：惰性过期（访问时检查）+ 主动过期（事件循环周期触发抽样清理）
-- 配置：支持配置文件和启动参数设置端口、AOF 开关、AOF 文件路径、`appendfsync` 策略和 `replicaof` 复制角色
-- 观测：支持 `INFO` 输出 server、clients、stats、persistence、replication 基础指标
-- 复制：支持简化版 master/replica，全量快照命令流同步、后续写命令传播、replication backlog、partial resync 和断线重连
-- 持久化：AOF（写命令追加 + 启动重放恢复 + `REWRITEAOF/BGREWRITEAOF` + `always/everysec/no` fsync 策略）
-- 测试基线：`test_sds`、`test_dict`、`test_resp`、`test_config`、`test_command`、`test_aof`、`test_e2e`（已接入 CTest）
+## Supported Commands
 
-## 项目亮点
-- 网络与协议：基于 `epoll` LT 实现单线程事件循环，RESP2 解析器支持半包、粘包和 pipeline，一次读事件可连续解析多条完整命令。
-- 存储与对象：实现 SDS、DICT、RedisObject 和 InMemoryDB；DICT 使用 Redis 风格双表渐进式 rehash，Hash 类型复用该底层结构。
-- 持久化：AOF 覆盖写命令追加、启动 replay、同步 rewrite、后台 `BGREWRITEAOF`、rewrite buffer 和 `appendfsync` 策略。
-- 主从复制：实现 `PING -> REPLCONF -> PSYNC` 握手、`FULLRESYNC` 命令流全量同步、写命令传播、backlog、partial resync 和 replica 断线重连。
-- 工程验证：使用 GTest 覆盖基础结构、协议、配置、命令、AOF 和 TCP E2E；复制 E2E 覆盖全量同步、增量传播、backlog 补发和重连恢复。
+Basic:
 
+- `PING [message]`
 
-## 与 Redis 官方实现的主要差异
+String and key:
 
-TinyRedis 保留 Redis 的核心设计思想，但当前仍是教学/简历项目级实现：网络层直接使用单线程 `epoll`；全量复制使用命令流而不是 RDB；持久化暂未实现 RDB 和混合持久化；复制暂未实现 ACK、replid2、Sentinel、Cluster 和自动故障转移。更完整对比见 [docs/design.md](docs/design.md)。
+- `SET key value`
+- `MSET key value [key value ...]`
+- `GET key`
+- `MGET key [key ...]`
+- `DEL key [key ...]`
+- `EXISTS key [key ...]`
+- `INCR key`
+- `INCRBY key increment`
+- `DECR key`
 
+Hash:
 
-## 目录结构
-```text
-TinyRedis/
-├── CMakeLists.txt
-├── main.cpp
-├── include/        # 头文件：net/protocol/command/core/object/persistence/replication
-├── src/            # 源码实现
-├── test/           # 单元测试与 TCP E2E 测试
-├── docs/           # 设计文档与路线图
-├── conf/           # 配置样例
-└── perf/           # 性能基线
+- `HSET key field value [field value ...]`
+- `HGET key field`
+- `HMGET key field [field ...]`
+- `HDEL key field [field ...]`
+- `HEXISTS key field`
+- `HLEN key`
+- `HKEYS key`
+- `HVALS key`
+- `HGETALL key`
+
+TTL:
+
+- `EXPIRE key seconds`
+- `TTL key`
+- `PTTL key`
+- `PERSIST key`
+
+Observability and persistence:
+
+- `INFO [server|clients|stats|persistence|replication|default|all]`
+- `REWRITEAOF`
+- `BGREWRITEAOF`
+
+Replication handshake:
+
+- `REPLCONF ...`
+- `PSYNC ? -1`
+- `PSYNC <replid> <offset>`
+
+Replica instances reject normal write commands with a `READONLY` error. Writes applied from the master replication stream are replayed internally.
+
+## Replication
+
+Start a master:
+
+```bash
+./build/tinyredis --port 6379
 ```
 
-## 快速开始
-拉取代码后，在项目根目录执行：
+Create a replica config, for example `conf/replica.conf`:
+
+```conf
+port 6380
+appendonly yes
+appendfilename replica.aof
+appendfsync everysec
+replicaof 127.0.0.1 6379
+```
+
+Start the replica:
+
+```bash
+./build/tinyredis --config conf/replica.conf
+```
+
+Replication behavior:
+
+- The replica connects to the master and sends `PING`, `REPLCONF`, then `PSYNC`.
+- First sync uses `PSYNC ? -1` and receives `FULLRESYNC`.
+- Full sync is represented as a stream of Redis commands instead of an RDB file.
+- After full sync, the master propagates write commands to connected replicas.
+- If a replica reconnects with a known replication id and offset that are still in the backlog, the master returns `CONTINUE` and sends the missing backlog commands.
+- If partial resync is not possible, the master falls back to full resync.
+
+This is intentionally simpler than Redis. It does not implement ACK tracking, `replid2`, Sentinel, Cluster, automatic failover, or RDB-based full synchronization.
+
+## Persistence
+
+When AOF is enabled, successful write commands are appended to the configured AOF file. On startup, TinyRedis replays the AOF to restore the in-memory dataset.
+
+Supported fsync policies:
+
+- `always`: fsync each write command.
+- `everysec`: flush from the event-loop cron path roughly once per second.
+- `no`: leave flushing to the operating system.
+
+AOF rewrite commands:
+
+- `REWRITEAOF` builds a compact AOF synchronously from the current memory snapshot.
+- `BGREWRITEAOF` builds a temporary AOF in the background, buffers concurrent writes, and atomically switches files from the cron path after the background rewrite finishes.
+
+Snapshot rewrite currently emits `SET`, `HSET`, and `EXPIRE` commands. TTL values are rounded up to seconds during rewrite.
+
+## Tests
+
+With `BUILD_TESTING=ON`, CMake builds the test targets and registers them with CTest:
 
 ```bash
 cmake -S . -B build
 cmake --build build -j
-./build/tinyredis
-```
-
-默认监听 `127.0.0.1:6379`，也可以通过第一个参数指定端口：
-
-```bash
-./build/tinyredis 6380
-```
-
-也可以显式指定配置文件。TinyRedis 默认不会自动读取 `conf/tinyredis.conf`，只有传入 `--config` 或把配置文件路径作为位置参数时才会加载：
-
-```bash
-./build/tinyredis --config conf/tinyredis.conf
-./build/tinyredis --config conf/tinyredis.conf --port 6380
-```
-
-兼容的位置参数写法：
-
-```bash
-./build/tinyredis 6380
-./build/tinyredis conf/tinyredis.conf
-./build/tinyredis 6380 conf/tinyredis.conf
-```
-
-如果同时指定配置文件和端口参数，命令行端口会覆盖配置文件里的 `port`。
-
-### 配置文件说明
-
-当前支持的配置项：
-
-```conf
-port 6379
-appendonly yes
-appendfilename appendonly.aof
-appendfsync everysec
-# replicaof 127.0.0.1 6379
-```
-
-- `port`：监听端口，范围 `1..65535`，默认 `6379`
-- `appendonly`：是否开启 AOF，支持 `yes/no`、`true/false`、`1/0`
-- `appendfilename`：AOF 文件路径；相对路径会按启动进程时的当前工作目录解析
-- `appendfsync`：AOF 刷盘策略，支持 `always/everysec/no`
-- `replicaof <host> <port>`：以 replica 模式连接 master；也支持 `replicaof no one` 切回 master 配置
-
-配置文件语法是每行一个指令，`#` 后面是注释。未知指令或参数数量不正确会导致启动失败。
-
-## 运行测试
-测试依赖 GTest。默认 `BUILD_TESTING=ON` 时会编译测试目标，然后执行：
-
-```bash
 ctest --test-dir build --output-on-failure
 ```
 
-也可以单独运行核心测试：
+Individual targets:
 
 ```bash
+./build/test_sds
 ./build/test_dict
+./build/test_resp
+./build/test_config
 ./build/test_command
 ./build/test_aof
 ./build/test_e2e
 ```
 
-其中 `test_e2e` 会启动本机 TCP 服务进程，覆盖客户端命令流、异常连接、主从全量同步、partial resync 和重连同步。
+`test_e2e` starts local TCP server processes and covers client command streams, invalid connections, full replication sync, partial resync, and reconnect recovery.
 
+## Performance
 
-## 文档索引
-- [设计说明](docs/design.md)
-- [性能基线](perf/README.md)
+The `perf/` directory contains benchmark configs and a wrapper around `redis-benchmark`.
 
-## 性能摘要
-当前已记录第一版性能基线，包括 AOF 策略对比和 no AOF 不同客户端数的并发基线。
+Build and start a no-AOF baseline:
 
-详见：[perf/README.md](perf/README.md)
+```bash
+cmake --build build -j
+./build/tinyredis --config perf/noaof.conf
+```
 
-## 相关文章
-[从0到1做一个 C++ Redis内核：项目设计与模块拆分](https://blog.csdn.net/2402_87224981/article/details/160474316)  
-[基于epoll的单线程Reactor：Tinyredis的网络层实现](https://blog.csdn.net/2402_87224981/article/details/160557193)
+Run the default benchmark from another terminal:
+
+```bash
+bash perf/benchmark.sh
+```
+
+Default benchmark parameters:
+
+```text
+HOST=127.0.0.1
+PORT=6380
+REQUESTS=100000
+CLIENTS=50
+TESTS=set,get,incr
+```
+
+The first recorded local baseline is documented in [perf/README.md](perf/README.md).
+
+## Project Layout
+
+```text
+TinyRedis/
+├── CMakeLists.txt
+├── main.cpp
+├── include/        # Headers: net/protocol/command/core/object/persistence/replication
+├── src/            # Implementations
+├── test/           # Unit tests and TCP E2E tests
+├── docs/           # Design notes and assets
+├── conf/           # Sample configuration
+└── perf/           # Benchmark configs and scripts
+```
+
+## Current Limitations
+
+TinyRedis keeps the core Redis ideas but is still a compact educational/project implementation.
+
+Not implemented yet:
+
+- List, Set, and ZSet data types.
+- Multiple logical databases.
+- Transactions, Lua scripting, pub/sub, streams, modules, Sentinel, Cluster, and automatic failover.
+- RDB persistence and mixed RDB+AOF persistence.
+- RDB-based full sync.
+- `SET` options such as `EX`, `PX`, `NX`, `XX`, and `KEEPTTL`.
+- Complete Redis replication semantics such as ACK tracking and `replid2`.
+
+See [docs/design.md](docs/design.md) for deeper implementation notes.
+
+## Related Articles
+
+- [从0到1做一个 C++ Redis内核：项目设计与模块拆分](https://blog.csdn.net/2402_87224981/article/details/160474316)
+- [基于epoll的单线程Reactor：Tinyredis的网络层实现](https://blog.csdn.net/2402_87224981/article/details/160557193)
